@@ -54,8 +54,8 @@ PROMPT --- Packages: specs + bodies ---
 -- here as they land so install.sql always reflects what actually exists.
 @@packages/pkg_security.pks
 @@packages/pkg_security.pkb
--- @@packages/pkg_order_status.pks
--- @@packages/pkg_order_status.pkb
+@@packages/pkg_order_status.pks
+@@packages/pkg_order_status.pkb
 -- @@packages/pkg_compat.pks
 -- @@packages/pkg_compat.pkb
 -- @@packages/pkg_pricing.pks
