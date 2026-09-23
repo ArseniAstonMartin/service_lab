@@ -1,11 +1,18 @@
 -- ============================================================================
 -- test_pkg_order.sql
 -- TASK-015: Unit tests for pkg_order.submit_order.
+-- TASK-028: added EMAIL_LOG assertions for the ORDER_SUBMITTED/
+-- ADMIN_NEW_ORDER notification dispatch submit_order now does on success.
 --
 -- Run via SQL Workshop -> SQL Commands (or SQLcl) AFTER pkg_order has been
 -- installed (which needs 010-060_*.sql and pkg_security/pkg_order_status/
--- pkg_compat/pkg_pricing). Self-contained: creates its own TEST_-prefixed
--- fixture rows and ROLLBACKs everything at the end.
+-- pkg_compat/pkg_pricing/pkg_notify). Self-contained: creates its own
+-- TEST_-prefixed fixture rows and ROLLBACKs everything at the end -- this
+-- still works after TASK-028, since submit_order deliberately does NOT
+-- COMMIT internally (see pkg_order.pkb's header comment for why); the
+-- EMAIL_LOG rows the notification dispatch writes are ordinary inserts in
+-- this same session/transaction, discarded by the same final ROLLBACK as
+-- everything else.
 --
 -- Does NOT exercise the photo-storage path with a real file (no live APEX
 -- session means APEX_APPLICATION_TEMP_FILES is always empty here) --
@@ -25,6 +32,7 @@ DECLARE
     v_service_a_id         service.service_id%TYPE;  -- confirmed for the matched entry
     v_service_b_id           service.service_id%TYPE;  -- NOT linked to the matched entry
     v_entry_id                  compatibility_entry.entry_id%TYPE;
+    v_admin_email                  app_setting.setting_value%TYPE;  -- TASK-028: whatever ADMIN_EMAIL actually is
 
     v_no_answers    pkg_order.t_answer_input_tab;
     v_no_photos     pkg_order.t_photo_input_tab;
@@ -87,6 +95,24 @@ BEGIN
     ON (tgt.setting_key = src.setting_key)
     WHEN NOT MATCHED THEN INSERT (setting_key, setting_value) VALUES (src.setting_key, src.setting_value);
 
+    -- TASK-028: submit_order's own notification dispatch needs these two to
+    -- resolve a recipient/base URL at all; leaves any real value alone if
+    -- already set, same MERGE pattern as RETURN_SHIPPING_FEE above.
+    MERGE INTO app_setting tgt
+    USING (SELECT 'ADMIN_EMAIL' AS setting_key, 'admin@ecuservicelaboahu.example' AS setting_value FROM dual) src
+    ON (tgt.setting_key = src.setting_key)
+    WHEN NOT MATCHED THEN INSERT (setting_key, setting_value) VALUES (src.setting_key, src.setting_value);
+
+    MERGE INTO app_setting tgt
+    USING (SELECT 'APP_BASE_URL' AS setting_key, 'https://apex.oracle.com/pls/apex/wksp_hawaiiautomotive/' AS setting_value FROM dual) src
+    ON (tgt.setting_key = src.setting_key)
+    WHEN NOT MATCHED THEN INSERT (setting_key, setting_value) VALUES (src.setting_key, src.setting_value);
+
+    -- Read back whatever ADMIN_EMAIL actually ends up as (the MERGE above
+    -- only inserts if missing) rather than assuming our own fixture value
+    -- won, so the assertion below is correct either way.
+    SELECT setting_value INTO v_admin_email FROM app_setting WHERE setting_key = 'ADMIN_EMAIL';
+
     DBMS_OUTPUT.PUT_LINE('Fixtures created: category=' || v_category_id || ' vehicle=' || v_vehicle_id
         || ' service_a=' || v_service_a_id || ' service_b=' || v_service_b_id || ' entry=' || v_entry_id);
     DBMS_OUTPUT.PUT_LINE('----------------------------------------------------------------');
@@ -139,6 +165,15 @@ BEGIN
                v_hist_count = 1, 'hist_count=' || v_hist_count);
         report('unmatched: TRACKING_TOKEN was returned and is non-null',
                v_token IS NOT NULL);
+
+        DECLARE
+            v_email_count PLS_INTEGER;
+        BEGIN
+            SELECT COUNT(*) INTO v_email_count FROM email_log
+             WHERE order_id = v_order_id AND email_type IN ('ORDER_SUBMITTED', 'ADMIN_NEW_ORDER');
+            report('unmatched: submit_order dispatched both #1 and #5 (TASK-028)',
+                   v_email_count = 2, 'email_count=' || v_email_count);
+        END;
     EXCEPTION
         WHEN OTHERS THEN
             report('unmatched path completes without error', FALSE, SQLERRM);
@@ -239,6 +274,27 @@ BEGIN
         BEGIN
             SELECT COUNT(*) INTO v_ans_count FROM order_answer WHERE order_id = v_order_id;
             report('matched: both ORDER_ANSWER rows were saved', v_ans_count = 2, 'ans_count=' || v_ans_count);
+        END;
+
+        DECLARE
+            v_email_count    PLS_INTEGER;
+            v_admin_recip    email_log.recipient%TYPE;
+            v_customer_recip email_log.recipient%TYPE;
+        BEGIN
+            SELECT COUNT(*) INTO v_email_count FROM email_log
+             WHERE order_id = v_order_id AND email_type IN ('ORDER_SUBMITTED', 'ADMIN_NEW_ORDER');
+            report('matched: submit_order dispatched both #1 and #5 (TASK-028)',
+                   v_email_count = 2, 'email_count=' || v_email_count);
+
+            SELECT recipient INTO v_customer_recip FROM email_log
+             WHERE order_id = v_order_id AND email_type = 'ORDER_SUBMITTED';
+            report('matched: #1 (ORDER_SUBMITTED) went to the customer''s own email',
+                   v_customer_recip = 'test.customer@example.com', v_customer_recip);
+
+            SELECT recipient INTO v_admin_recip FROM email_log
+             WHERE order_id = v_order_id AND email_type = 'ADMIN_NEW_ORDER';
+            report('matched: #5 (ADMIN_NEW_ORDER) went to APP_SETTING.ADMIN_EMAIL, not the customer',
+                   v_admin_recip = v_admin_email, v_admin_recip || ' vs ' || v_admin_email);
         END;
     EXCEPTION
         WHEN OTHERS THEN
@@ -444,6 +500,18 @@ BEGIN
                'order1=' || v_order_id_1 || ' order2=' || v_order_id_2);
         report('idempotency: only one ORDERS row exists for that key', v_order_count = 1, 'order_count=' || v_order_count);
         report('idempotency: the resubmit did not add a second history row', v_hist_count = 1, 'hist_count=' || v_hist_count);
+
+        DECLARE
+            v_email_count PLS_INTEGER;
+        BEGIN
+            -- TASK-028: the replay branch calls send_order_notifications too
+            -- (see pkg_order.pkb) -- must still be exactly one EMAIL_LOG row
+            -- per type, not two, even though submit_order ran twice.
+            SELECT COUNT(*) INTO v_email_count FROM email_log
+             WHERE order_id = v_order_id_1 AND email_type IN ('ORDER_SUBMITTED', 'ADMIN_NEW_ORDER');
+            report('idempotency: the resubmit did not send duplicate notification emails (TASK-028)',
+                   v_email_count = 2, 'email_count=' || v_email_count);
+        END;
     EXCEPTION
         WHEN OTHERS THEN
             report('idempotency test completes without error', FALSE, SQLERRM);

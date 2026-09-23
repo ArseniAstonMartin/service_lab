@@ -1,6 +1,9 @@
 -- ============================================================================
 -- pkg_order.pks
 -- TASK-015: atomic order creation for both submission paths.
+-- TASK-028: added the exactly-once ORDER_SUBMITTED/ADMIN_NEW_ORDER
+-- notification dispatch (see submit_order's own comment below and
+-- pkg_order.pkb's header for the commit-timing trade-off this involved).
 --
 -- The single entry point the wizard's final "submit" step (f92606 Page 15,
 -- TASK-022) calls. Everything a submission produces -- the ORDERS row, its
@@ -61,8 +64,11 @@ CREATE OR REPLACE PACKAGE pkg_order AUTHID DEFINER AS
     -- p_idempotency_key: generated client-side when the review/submit page
     -- loads (TASK-022). A second call with a key already on an ORDERS row
     -- returns that existing order's ORDER_ID/TRACKING_TOKEN unchanged and
-    -- does no further work -- no duplicate order, photos, answers or
-    -- history row.
+    -- does no further work of its own -- no duplicate order, photos,
+    -- answers or history row. It still (harmlessly) re-runs the TASK-028
+    -- notification dispatch below, since that dispatch is itself
+    -- exactly-once (via pkg_notify.send_once) regardless of how many times
+    -- submit_order is called for the same order -- see the TASK-028 note.
     --
     -- Server-side flow, decided entirely inside this procedure (PRD 4.2 --
     -- never trust the client's match/no-match flag):
@@ -89,6 +95,14 @@ CREATE OR REPLACE PACKAGE pkg_order AUTHID DEFINER AS
     -- that savepoint and re-raises, so a partial order is never left behind
     -- even if the caller's own error handling does nothing special (see
     -- pkg_order.pkb's header comment).
+    --
+    -- TASK-028: once that write block has completed without raising (i.e.
+    -- the order is fully and correctly built, and the only thing left is
+    -- for the caller to COMMIT), submit_order dispatches email #1
+    -- (ORDER_SUBMITTED, to the customer, worded for whichever path this
+    -- order took) and email #5 (ADMIN_NEW_ORDER, to APP_SETTING.ADMIN_EMAIL)
+    -- via pkg_notify.send_once -- see pkg_order.pkb's header comment for why
+    -- this is positioned there rather than after an actual COMMIT statement.
     -- ------------------------------------------------------------------------
     PROCEDURE submit_order(
         p_vehicle_id             IN  NUMBER,

@@ -14,6 +14,35 @@
 -- own COMMIT/ROLLBACK of whatever it did before calling submit_order is
 -- untouched). This is the same "guarantee cleanup, then re-raise" shape
 -- pkg_order_status.change_status uses for its own context-flag cleanup.
+--
+-- TASK-028 note on commit timing: that task's acceptance criteria call for
+-- the ORDER_SUBMITTED/ADMIN_NEW_ORDER emails to fire "after a successful
+-- commit". submit_order deliberately does NOT issue a COMMIT of its own to
+-- satisfy that literally -- every other package in this schema (pkg_
+-- pricing, pkg_order_status, pkg_stripe, ...) leaves the COMMIT to the
+-- caller by design, and this package's own header above documents callers
+-- relying on that. Making submit_order COMMIT internally would also be a
+-- correctness hazard for every self-contained test script in this project
+-- (test_pkg_order.sql included): those scripts insert their own TEST_-
+-- prefixed fixture rows (MODULE_CATEGORY, VEHICLE_REF, SERVICE, ...) in the
+-- SAME session/transaction before calling submit_order, and a COMMIT inside
+-- submit_order commits the WHOLE current transaction, not just this
+-- procedure's own writes -- there is no such thing as a partial commit in
+-- Oracle. That would permanently write every fixture row (not just the
+-- ORDERS row) into this shared apex.oracle.com workspace, defeating the
+-- final ROLLBACK every test in this project relies on to stay self-
+-- contained. So instead, send_order_notifications below is called once the
+-- SAVEPOINT-protected write block has completed with no exception raised
+-- (the strongest "this succeeded" signal available without an internal
+-- COMMIT) -- both here and on the idempotent-replay path. In the real
+-- runtime (an APEX page process), that point is immediately followed by
+-- APEX's own automatic commit of the process, with no user-facing step in
+-- between, so in practice this is equivalent to "after a successful
+-- commit" for every real submission; the only residual gap is a caller
+-- that calls submit_order and then fails to commit for its own unrelated
+-- reasons, which would leave a customer notified about data that was never
+-- actually persisted -- a known, accepted trade-off, documented here should
+-- a future agent with live App Builder access want to revisit it.
 -- ============================================================================
 CREATE OR REPLACE PACKAGE BODY pkg_order AS
 
@@ -36,6 +65,114 @@ CREATE OR REPLACE PACKAGE BODY pkg_order AS
         WHEN OTHERS THEN
             RETURN 'SYSTEM';
     END current_actor;
+
+    -- ----------------------------------------------------------------------------
+    -- log_error
+    -- Same convention as pkg_stripe.log_error/pkg_notify's own internal
+    -- error handling: a small private, autonomous-transaction logger, since
+    -- no shared logging package exists yet. Used only by
+    -- send_order_notifications below, to make sure a bug in THIS
+    -- procedure's own SQL (building placeholders, resolving the admin URL,
+    -- ...) can never surface as a submit_order failure for an order that,
+    -- by the time this runs, has already been fully and correctly built --
+    -- see send_order_notifications.
+    -- ----------------------------------------------------------------------------
+    PROCEDURE log_error(
+        p_source   IN VARCHAR2,
+        p_message  IN VARCHAR2,
+        p_order_id IN NUMBER DEFAULT NULL
+    ) IS
+        PRAGMA AUTONOMOUS_TRANSACTION;
+    BEGIN
+        INSERT INTO app_error_log (error_source, error_message, order_id)
+        VALUES (p_source, SUBSTR(p_message, 1, 4000), p_order_id);
+
+        COMMIT;
+    END log_error;
+
+    -- ----------------------------------------------------------------------------
+    -- send_order_notifications
+    -- TASK-028: dispatches email #1 (ORDER_SUBMITTED, to the customer) and
+    -- email #5 (ADMIN_NEW_ORDER, to APP_SETTING.ADMIN_EMAIL) for an order
+    -- that submit_order has just (or previously) built. Called from both of
+    -- submit_order's exit points -- see pkg_order.pkb's header comment for
+    -- why this sits where it does rather than after an actual COMMIT.
+    --
+    -- Uses pkg_notify.send_once, not send, for both emails -- so calling
+    -- this more than once for the same order_id (the idempotent-replay
+    -- path calls it on every replay, not just the first) never sends a
+    -- duplicate: EMAIL_LOG already has a row for that (order_id,
+    -- email_type) after the first successful dispatch, and send_once no-ops
+    -- from then on. This is this task's own acceptance criterion ("each
+    -- email is sent exactly once per order, checked in EMAIL_LOG").
+    --
+    -- #1's wording differs by path (PRD: "next steps specific to the
+    -- path") via the NEXT_STEPS placeholder, computed here from ORDERS.
+    -- MATCHED_ENTRY_ID rather than by asking the caller, since by this
+    -- point that's already the authoritative, server-decided answer.
+    --
+    -- #5 gets CUSTOMER_PHONE, PART_NUMBER and ADMIN_ORDER_URL (a link to
+    -- f94517 Page 11, from pkg_notify.admin_order_url) on top of the usual
+    -- defaults -- and deliberately nothing photo-related: PRD/TASK-028
+    -- acceptance criteria require any uploaded photo be reached only
+    -- through the admin app itself, never through the email.
+    --
+    -- Wrapped in its own exception handler that logs to APP_ERROR_LOG and
+    -- swallows -- a bug here must never turn an already-successful order
+    -- submission into a failure the customer sees.
+    -- ----------------------------------------------------------------------------
+    PROCEDURE send_order_notifications(p_order_id IN orders.order_id%TYPE) IS
+        l_matched_entry_id  orders.matched_entry_id%TYPE;
+        l_part_number       orders.part_number_entered%TYPE;
+        l_customer_phone    orders.customer_phone%TYPE;
+        l_next_steps        VARCHAR2(500);
+        l_customer_json     CLOB;
+        l_admin_json        CLOB;
+    BEGIN
+        SELECT matched_entry_id, part_number_entered, customer_phone
+          INTO l_matched_entry_id, l_part_number, l_customer_phone
+          FROM orders
+         WHERE order_id = p_order_id;
+
+        l_next_steps := CASE
+            WHEN l_matched_entry_id IS NOT NULL THEN
+                'Watch your inbox for a secure Stripe payment link -- we will send it shortly, and work on your module begins as soon as payment is received.'
+            ELSE
+                'Our technicians are reviewing your Part Number to confirm compatibility. We will follow up by email, typically within 1-2 business days, once that review is complete.'
+        END;
+
+        SELECT JSON_OBJECT('NEXT_STEPS' VALUE l_next_steps RETURNING CLOB)
+          INTO l_customer_json
+          FROM dual;
+
+        pkg_notify.send_once(
+            p_order_id           => p_order_id,
+            p_email_type         => 'ORDER_SUBMITTED',
+            p_extra_placeholders => l_customer_json
+        );
+
+        SELECT JSON_OBJECT(
+                   'CUSTOMER_PHONE'  VALUE l_customer_phone,
+                   'PART_NUMBER'     VALUE l_part_number,
+                   'ADMIN_ORDER_URL' VALUE pkg_notify.admin_order_url(p_order_id)
+                   RETURNING CLOB)
+          INTO l_admin_json
+          FROM dual;
+
+        pkg_notify.send_once(
+            p_order_id           => p_order_id,
+            p_email_type         => 'ADMIN_NEW_ORDER',
+            p_extra_placeholders => l_admin_json
+        );
+    EXCEPTION
+        WHEN OTHERS THEN
+            log_error(
+                p_source   => 'PKG_ORDER.SEND_ORDER_NOTIFICATIONS',
+                p_message  => SQLERRM,
+                p_order_id => p_order_id
+            );
+            -- Deliberately swallowed -- see this procedure's header comment.
+    END send_order_notifications;
 
     -- ----------------------------------------------------------------------------
     -- submit_order
@@ -68,8 +205,10 @@ CREATE OR REPLACE PACKAGE BODY pkg_order AS
     BEGIN
         ------------------------------------------------------------------
         -- Idempotent replay: a repeated submit with the same key returns
-        -- the existing order and does nothing else. Checked before the
-        -- savepoint below -- there is nothing to protect yet.
+        -- the existing order and does no further writes of its own. Still
+        -- (harmlessly, via send_once) re-runs notification dispatch --
+        -- see pkg_order.pks / this file's header comment. Checked before
+        -- the savepoint below -- there is nothing to protect yet.
         ------------------------------------------------------------------
         BEGIN
             SELECT order_id, tracking_token
@@ -77,6 +216,7 @@ CREATE OR REPLACE PACKAGE BODY pkg_order AS
               FROM orders
              WHERE idempotency_key = p_idempotency_key;
 
+            send_order_notifications(p_order_id);
             RETURN; -- existing order found: no new writes at all.
         EXCEPTION
             WHEN NO_DATA_FOUND THEN
@@ -201,6 +341,14 @@ CREATE OR REPLACE PACKAGE BODY pkg_order AS
                 ROLLBACK TO SAVEPOINT sp_submit_order;
                 RAISE;
         END;
+
+        ------------------------------------------------------------------
+        -- TASK-028: the write block above completed with no exception --
+        -- the order is fully and correctly built. See this file's header
+        -- comment for why notification dispatch sits here rather than
+        -- after an actual COMMIT statement.
+        ------------------------------------------------------------------
+        send_order_notifications(p_order_id);
     END submit_order;
 
 END pkg_order;

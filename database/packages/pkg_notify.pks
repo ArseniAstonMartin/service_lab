@@ -80,10 +80,11 @@ CREATE OR REPLACE PACKAGE pkg_notify AUTHID DEFINER AS
     -- reason), since an email that was actually queued/sent is an
     -- irreversible side effect that the log must keep recording regardless.
     --
-    -- Does NOT itself check "already sent" / enforce exactly-once --
-    -- EMAIL_LOG's own comment says that guarantee is the CALLER's job
-    -- (pkg_order / pkg_order_status query EMAIL_LOG before invoking send).
-    -- send() is deliberately just "send this one, right now, and log it".
+    -- Does NOT itself check "already sent" / enforce exactly-once -- that
+    -- guarantee is send_once's job (below). send() is deliberately just
+    -- "send this one, right now, and log it"; most callers should use
+    -- send_once instead unless they specifically want an unconditional
+    -- (re)send.
     -- ------------------------------------------------------------------------
     PROCEDURE send(
         p_order_id           IN NUMBER,
@@ -91,6 +92,49 @@ CREATE OR REPLACE PACKAGE pkg_notify AUTHID DEFINER AS
         p_extra_placeholders IN CLOB DEFAULT NULL,
         p_recipient_override IN VARCHAR2 DEFAULT NULL
     );
+
+    -- ------------------------------------------------------------------------
+    -- already_sent
+    -- TRUE if EMAIL_LOG already has a row for this (p_order_id,
+    -- p_email_type) pair, regardless of whether that attempt's RESULT was
+    -- SUCCESS or FAILED -- "exactly once" here means "attempted once", not
+    -- "delivered once": a FAILED row still represents a real APEX_MAIL call
+    -- that was made, and silently retrying it on every subsequent call
+    -- (e.g. every idempotent pkg_order.submit_order replay) would defeat
+    -- the "once" guarantee just as surely as sending twice would. A caller
+    -- that specifically wants to retry a FAILED send does so explicitly via
+    -- send(), not send_once().
+    -- ------------------------------------------------------------------------
+    FUNCTION already_sent(p_order_id IN NUMBER, p_email_type IN VARCHAR2) RETURN BOOLEAN;
+
+    -- ------------------------------------------------------------------------
+    -- send_once
+    -- send(), guarded by already_sent -- a no-op if EMAIL_LOG already has a
+    -- row for this (p_order_id, p_email_type). This is what every trigger
+    -- point (TASK-028/029/031) should call instead of send() directly, so
+    -- "each email is sent exactly once per order" (each of those tasks' own
+    -- acceptance criteria) holds automatically even when the caller itself
+    -- might run more than once for the same order -- e.g.
+    -- pkg_order.submit_order's idempotent-replay branch, or an admin
+    -- retrying a status change.
+    -- ------------------------------------------------------------------------
+    PROCEDURE send_once(
+        p_order_id           IN NUMBER,
+        p_email_type         IN VARCHAR2,
+        p_extra_placeholders IN CLOB DEFAULT NULL,
+        p_recipient_override IN VARCHAR2 DEFAULT NULL
+    );
+
+    -- ------------------------------------------------------------------------
+    -- admin_order_url
+    -- Builds the f94517 (admin) Page 11 order-detail link for p_order_id --
+    -- e.g. for the ADMIN_NEW_ORDER email's #ADMIN_ORDER_URL# placeholder
+    -- (TASK-028). A sibling to default_placeholders' own #TRACKING_URL#
+    -- construction, just pointed at the admin app instead of the public
+    -- one -- kept here, rather than duplicated in every admin-facing
+    -- caller, since this package already owns APP_BASE_URL/app-link logic.
+    -- ------------------------------------------------------------------------
+    FUNCTION admin_order_url(p_order_id IN NUMBER) RETURN VARCHAR2;
 
 END pkg_notify;
 /

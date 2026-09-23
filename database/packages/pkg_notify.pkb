@@ -19,6 +19,8 @@ CREATE OR REPLACE PACKAGE BODY pkg_notify AS
 
     c_public_app_id  CONSTANT VARCHAR2(10) := '92606'; -- f92606, Page 30 = public tracking (TASK-025)
     c_tracking_page   CONSTANT VARCHAR2(10) := '30';
+    c_admin_app_id     CONSTANT VARCHAR2(10) := '94517'; -- f94517, Page 11 = admin order detail (TASK-028)
+    c_admin_order_page  CONSTANT VARCHAR2(10) := '11';
 
     ----------------------------------------------------------------------------
     -- get_setting
@@ -64,6 +66,31 @@ CREATE OR REPLACE PACKAGE BODY pkg_notify AS
             RAISE_APPLICATION_ERROR(-20090,
                 'pkg_notify.default_placeholders: ORDER_ID ' || p_order_id || ' does not exist.');
     END default_placeholders;
+
+    ----------------------------------------------------------------------------
+    -- admin_order_url
+    ----------------------------------------------------------------------------
+    FUNCTION admin_order_url(p_order_id IN NUMBER) RETURN VARCHAR2 IS
+        l_base_url app_setting.setting_value%TYPE;
+    BEGIN
+        l_base_url := get_setting('APP_BASE_URL');
+
+        RETURN l_base_url || 'f?p=' || c_admin_app_id || ':' || c_admin_order_page
+               || ':::::P' || c_admin_order_page || '_ORDER_ID:' || p_order_id;
+    END admin_order_url;
+
+    ----------------------------------------------------------------------------
+    -- already_sent
+    ----------------------------------------------------------------------------
+    FUNCTION already_sent(p_order_id IN NUMBER, p_email_type IN VARCHAR2) RETURN BOOLEAN IS
+        l_count PLS_INTEGER;
+    BEGIN
+        SELECT COUNT(*) INTO l_count
+          FROM email_log
+         WHERE order_id = p_order_id AND email_type = p_email_type;
+
+        RETURN l_count > 0;
+    END already_sent;
 
     ----------------------------------------------------------------------------
     -- log_email
@@ -159,6 +186,26 @@ CREATE OR REPLACE PACKAGE BODY pkg_notify AS
                 -- send() in pkg_notify.pks.
         END;
     END send;
+
+    ----------------------------------------------------------------------------
+    -- send_once
+    ----------------------------------------------------------------------------
+    PROCEDURE send_once(
+        p_order_id           IN NUMBER,
+        p_email_type         IN VARCHAR2,
+        p_extra_placeholders IN CLOB DEFAULT NULL,
+        p_recipient_override IN VARCHAR2 DEFAULT NULL
+    ) IS
+    BEGIN
+        IF NOT already_sent(p_order_id, p_email_type) THEN
+            send(
+                p_order_id           => p_order_id,
+                p_email_type         => p_email_type,
+                p_extra_placeholders => p_extra_placeholders,
+                p_recipient_override => p_recipient_override
+            );
+        END IF;
+    END send_once;
 
 END pkg_notify;
 /

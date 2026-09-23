@@ -1,6 +1,7 @@
 -- ============================================================================
 -- test_pkg_notify.sql
 -- TASK-027: Unit tests for pkg_notify.
+-- TASK-028: added tests for already_sent/send_once/admin_order_url.
 --
 -- Run via SQL Workshop -> SQL Commands (or SQLcl) AFTER pkg_notify has been
 -- installed. Self-contained: creates its own TEST_-prefixed fixture rows and
@@ -219,6 +220,64 @@ BEGIN
 
         report('p_recipient_override overrides the default recipient',
                v_recipient = 'override.test@example.com', v_recipient);
+    END;
+
+    ----------------------------------------------------------------------
+    -- already_sent / send_once (TASK-028)
+    ----------------------------------------------------------------------
+    DECLARE
+        v_log_count PLS_INTEGER;
+    BEGIN
+        -- ORDER_SUBMITTED was already sent (real) above -- already_sent
+        -- must see that row.
+        report('already_sent is TRUE for a type already logged',
+               pkg_notify.already_sent(v_order_id, 'ORDER_SUBMITTED'));
+
+        -- SHIPPED_BACK has never been attempted for this order yet.
+        report('already_sent is FALSE for a type never logged',
+               NOT pkg_notify.already_sent(v_order_id, 'SHIPPED_BACK'));
+
+        -- send_once for the already-sent type must be a no-op: no new
+        -- EMAIL_LOG row.
+        SELECT COUNT(*) INTO v_log_count
+          FROM email_log
+         WHERE order_id = v_order_id AND email_type = 'ORDER_SUBMITTED';
+
+        pkg_notify.send_once(p_order_id => v_order_id, p_email_type => 'ORDER_SUBMITTED');
+
+        DECLARE
+            v_log_count_after PLS_INTEGER;
+        BEGIN
+            SELECT COUNT(*) INTO v_log_count_after
+              FROM email_log
+             WHERE order_id = v_order_id AND email_type = 'ORDER_SUBMITTED';
+
+            report('send_once is a no-op for a type already sent',
+                   v_log_count_after = v_log_count, 'before=' || v_log_count || ' after=' || v_log_count_after);
+        END;
+
+        -- send_once for a type never attempted must actually send (and log).
+        pkg_notify.send_once(p_order_id => v_order_id, p_email_type => 'SHIPPED_BACK');
+
+        SELECT COUNT(*) INTO v_log_count
+          FROM email_log
+         WHERE order_id = v_order_id AND email_type = 'SHIPPED_BACK';
+
+        report('send_once sends and logs a type not yet attempted', v_log_count = 1, 'count=' || v_log_count);
+    END;
+
+    ----------------------------------------------------------------------
+    -- admin_order_url (TASK-028)
+    ----------------------------------------------------------------------
+    DECLARE
+        v_url VARCHAR2(500);
+    BEGIN
+        v_url := pkg_notify.admin_order_url(v_order_id);
+
+        report('admin_order_url mentions the admin app id (94517)',
+               INSTR(v_url, '94517') > 0, v_url);
+        report('admin_order_url includes the order_id',
+               INSTR(v_url, TO_CHAR(v_order_id)) > 0, v_url);
     END;
 
     ----------------------------------------------------------------------
