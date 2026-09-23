@@ -56,8 +56,8 @@ PROMPT --- Packages: specs + bodies ---
 @@packages/pkg_security.pkb
 @@packages/pkg_order_status.pks
 @@packages/pkg_order_status.pkb
--- @@packages/pkg_compat.pks
--- @@packages/pkg_compat.pkb
+@@packages/pkg_compat.pks
+@@packages/pkg_compat.pkb
 -- @@packages/pkg_pricing.pks
 -- @@packages/pkg_pricing.pkb
 -- @@packages/pkg_order.pks
