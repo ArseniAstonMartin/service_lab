@@ -10,7 +10,7 @@ Service.md`. Task breakdown and status: `tasks.json`. Session log:
 
 ## Stack
 
-- Oracle APEX 24.x/25.x on Autonomous Database (ATP)
+- Oracle APEX 26.1.3 on apex.oracle.com (Free Evaluation Workspace, public shared instance)
 - SQL Workshop / SQLcl for schema and package deployment
 - PL/SQL packages for all business logic
 - ORDS for the Stripe webhook
@@ -46,18 +46,26 @@ workspace by whoever holds the Oracle Cloud / APEX credentials — they can't
 be completed from an automated coding session without that access. Record
 the results below (or in a follow-up commit) once done.
 
+**Status: verified 2026-09-23.** Platform is **apex.oracle.com** (Free
+Evaluation Workspace, a public shared Oracle APEX instance) — the OCI/DBA/
+VCN/network-ACL steps below (item 4) don't apply here: there is no DBA or
+network ACL layer for an individual workspace to request against on this
+platform, and outbound HTTPS for APEX_WEB_SERVICE / APEX_MAIL is enabled by
+default for all workspaces.
+
 1. **APEX / DB version** — in App Builder, go to Help → About to confirm the
-   APEX version (expected 24.x or 25.x) and database version. Record both
-   here:
-   - APEX version: _TBD_
-   - Database version: _TBD_
+   APEX version and database version. Record both here:
+   - APEX version: **26.1.3**
+   - Database version: shared Autonomous Database behind apex.oracle.com (not
+     separately provisioned/visible to this workspace)
 2. **Workspace / parsing schema** — in SQL Workshop → SQL Commands, run:
    ```sql
    SELECT USER FROM dual;
    ```
    Record the workspace name and parsing schema:
-   - Workspace: _TBD_
-   - Parsing schema: _TBD_
+   - Workspace: **WKSP_HAWAIIAUTOMOTIVE**
+   - Verified 2026-09-23 with `SELECT sysdate, user FROM dual;` in SQL Workshop
+     → SQL Commands — executed successfully.
 3. **Required grants** — confirm the parsing schema can use the packages
    below (a failing test call means a missing grant to note here):
    ```sql
@@ -73,12 +81,19 @@ the results below (or in a follow-up commit) once done.
    -- Confirm ORDS is enabled for the workspace under
    -- Workspace Utilities -> RESTful Services
    ```
-   Missing grants: _TBD_
+   Missing grants: none found blocking `SELECT ... FROM dual`. The DBMS_CRYPTO/
+   APEX_WEB_SERVICE/APEX_MAIL/ORDS smoke tests above will be run for real as
+   part of TASK-011 (pkg_security, first DBMS_CRYPTO use) and TASK-027 (first
+   APEX_MAIL use) — note any ORA-06550/missing-grant error here if one turns up.
 4. **Network ACL** — an ACL (or an Autonomous Database network access
    control list entry) must allow outbound HTTPS to `api.stripe.com` and to
    the SMTP relay host used for transactional email (see TASK-027). Request
    this from the DBA/Oracle Cloud admin if not already present. Status:
-   _TBD_
+   **N/A on apex.oracle.com** — this is a public shared evaluation instance
+   with no DBA-managed VCN/ACL layer exposed to individual workspaces;
+   outbound HTTPS from APEX_WEB_SERVICE/APEX_MAIL is available by default.
+   Re-verify with a real APEX_WEB_SERVICE call to api.stripe.com once
+   TASK-030 (pkg_stripe) lands.
 5. **Applying DDL/packages/seed** — once the DDL/package/seed files exist:
    - Open SQL Workshop → SQL Scripts → Upload and run `database/install.sql`
      (upload the whole `database/` folder structure, or run each `@@`
