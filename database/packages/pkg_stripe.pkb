@@ -1,8 +1,9 @@
 -- ============================================================================
 -- pkg_stripe.pkb
 -- TASK-030: create a Stripe Payment Link for an order and read it back.
--- See pkg_stripe.pks for the public contract, the required Web Credential
--- setup, and design rationale.
+-- TASK-031: create_payment_link now refuses an order not currently in
+-- Awaiting Payment status. See pkg_stripe.pks for the public contract, the
+-- required Web Credential setup, and design rationale.
 -- ============================================================================
 CREATE OR REPLACE PACKAGE BODY pkg_stripe AS
 
@@ -79,20 +80,21 @@ CREATE OR REPLACE PACKAGE BODY pkg_stripe AS
     -- create_payment_link
     ----------------------------------------------------------------------------
     FUNCTION create_payment_link(p_order_id IN NUMBER) RETURN VARCHAR2 IS
-        l_service_name      service.name%TYPE;
-        l_service_price     orders.service_price%TYPE;
-        l_return_fee        orders.return_shipping_fee%TYPE;
-        l_existing_link_id  orders.stripe_payment_link_id%TYPE;
-        l_body              VARCHAR2(4000);
-        l_response          CLOB;
-        l_status_code       PLS_INTEGER;
-        l_error_message     VARCHAR2(4000);
-        l_link_id           VARCHAR2(100);
-        l_link_url          VARCHAR2(500);
+        l_status             orders.status%TYPE;
+        l_service_name       service.name%TYPE;
+        l_service_price      orders.service_price%TYPE;
+        l_return_fee         orders.return_shipping_fee%TYPE;
+        l_existing_link_id   orders.stripe_payment_link_id%TYPE;
+        l_body               VARCHAR2(4000);
+        l_response           CLOB;
+        l_status_code        PLS_INTEGER;
+        l_error_message      VARCHAR2(4000);
+        l_link_id            VARCHAR2(100);
+        l_link_url           VARCHAR2(500);
     BEGIN
         BEGIN
-            SELECT o.service_price, o.return_shipping_fee, o.stripe_payment_link_id, sv.name
-              INTO l_service_price, l_return_fee, l_existing_link_id, l_service_name
+            SELECT o.status, o.service_price, o.return_shipping_fee, o.stripe_payment_link_id, sv.name
+              INTO l_status, l_service_price, l_return_fee, l_existing_link_id, l_service_name
               FROM orders o
               JOIN service sv ON sv.service_id = o.service_id
              WHERE o.order_id = p_order_id;
@@ -107,6 +109,23 @@ CREATE OR REPLACE PACKAGE BODY pkg_stripe AS
             RAISE_APPLICATION_ERROR(-20091,
                 'pkg_stripe.create_payment_link: ORDER_ID ' || p_order_id
                 || ' has not been priced yet (pkg_pricing.price_order must run first).');
+        END IF;
+
+        -- TASK-031 acceptance criteria: refuse an order in any status other
+        -- than Awaiting Payment -- checked before the idempotent branch
+        -- below, so a call for an order that has since moved on (e.g. paid
+        -- already, now Payment Received or later) is refused rather than
+        -- quietly handing back the old link's URL again. Checked after the
+        -- priced check above (existence -> priced -> status -> idempotent)
+        -- so an order that is both unpriced AND not Awaiting Payment still
+        -- gets the more specific -20091 ("not priced yet") rather than the
+        -- more generic -20096 -- matching how a not-yet-reviewed order
+        -- (Pending Review, unpriced) should be diagnosed.
+        IF l_status != 'Awaiting Payment' THEN
+            RAISE_APPLICATION_ERROR(-20096,
+                'pkg_stripe.create_payment_link: ORDER_ID ' || p_order_id
+                || ' is not in Awaiting Payment status (currently "' || l_status
+                || '") -- a payment link can only be created for an order awaiting payment.');
         END IF;
 
         -- Idempotent: don't create a second link for an order that already

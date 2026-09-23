@@ -1,6 +1,11 @@
 -- ============================================================================
 -- pkg_stripe.pks
 -- TASK-030: create a Stripe Payment Link for an order and read it back.
+-- TASK-031: create_payment_link now also refuses any order not currently in
+-- Awaiting Payment status (see its own comment below) -- no other public
+-- signature changed by this task; the payment-gate wiring itself (calling
+-- this from pkg_order_status on the transition, and email #2) lives in
+-- pkg_order_status.pkb.
 --
 -- Manual prerequisite (cannot be done from SQL -- this is exactly why PRD
 -- 10 / this task's acceptance criteria require it to live outside code and
@@ -39,12 +44,24 @@ CREATE OR REPLACE PACKAGE pkg_stripe AUTHID DEFINER AS
     -- already run for it) and to have a SERVICE_ID -- raises -20090/-20091
     -- otherwise.
     --
-    -- Idempotent: if ORDERS.STRIPE_PAYMENT_LINK_ID is already set for this
-    -- order, no new link is created -- the existing link's current URL is
-    -- re-fetched from Stripe and returned instead (TASK-031's "a repeated
-    -- call does not create a second link" requirement holds even called
-    -- directly, not only through the caller pkg_order_status.change_status
-    -- will use in TASK-031).
+    -- TASK-031: also requires ORDERS.STATUS to currently be 'Awaiting
+    -- Payment' -- raises -20096 otherwise. This is this task's own
+    -- acceptance criteria ("pkg_stripe.create_payment_link refuses an
+    -- order in any other status"), checked here rather than only relying
+    -- on pkg_order_status being this function's sole real-world caller, so
+    -- the guarantee holds for a direct call too (e.g. from SQL Workshop, or
+    -- a future admin action that calls this package without going through
+    -- change_status). Checked before the idempotent branch below, so even
+    -- a REPEATED call for an order that has since moved on (e.g. to
+    -- Payment Received after the customer already paid) is refused rather
+    -- than quietly re-returning the old link's URL.
+    --
+    -- Idempotent within Awaiting Payment: if ORDERS.STRIPE_PAYMENT_LINK_ID
+    -- is already set for this order, no new link is created -- the
+    -- existing link's current URL is re-fetched from Stripe and returned
+    -- instead (TASK-031's "a repeated call does not create a second link"
+    -- requirement holds even called directly, not only through the caller
+    -- pkg_order_status.change_status uses).
     --
     -- On any Stripe API failure (network error, non-2xx response, or a 2xx
     -- response missing id/url), the failure is written to APP_ERROR_LOG

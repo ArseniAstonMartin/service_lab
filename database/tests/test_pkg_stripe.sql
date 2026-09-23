@@ -11,12 +11,17 @@
 -- POST, get_payment_link_status/the idempotent re-fetch's GET) -- this
 -- session has no live Stripe test-mode credential or network path to
 -- api.stripe.com. What IS tested here is everything that fails before an
--- HTTP call is ever made: the order-not-found, not-yet-priced, and
--- no-link-yet guard clauses, all of which raise before
+-- HTTP call is ever made: the order-not-found, not-yet-priced, wrong-status
+-- (TASK-031) and no-link-yet guard clauses, all of which raise before
 -- APEX_WEB_SERVICE.MAKE_REST_REQUEST is reached. The actual create/read
 -- round-trip against Stripe test mode (this task's own acceptance
 -- criterion) needs a live session with the STRIPE_SECRET_KEY Web
 -- Credential configured -- see pkg_stripe.pks's header comment.
+--
+-- TASK-031: added a guard-clause test for create_payment_link's new status
+-- check -- a priced order that is NOT in Awaiting Payment status (e.g.
+-- already Payment Received) must be refused with ORA-20096, even though it
+-- has everything else create_payment_link would otherwise accept.
 -- ============================================================================
 
 SET SERVEROUTPUT ON SIZE UNLIMITED
@@ -28,9 +33,10 @@ DECLARE
     v_category_id         module_category.category_id%TYPE;
     v_vehicle_id          vehicle_ref.vehicle_id%TYPE;
     v_service_id          service.service_id%TYPE;
-    v_order_unmatched_id  orders.order_id%TYPE;  -- no SERVICE_ID at all
-    v_order_unpriced_id   orders.order_id%TYPE;  -- SERVICE_ID set, but not priced
-    v_order_priced_id     orders.order_id%TYPE;  -- priced, but no Stripe link yet
+    v_order_unmatched_id     orders.order_id%TYPE;  -- no SERVICE_ID at all
+    v_order_unpriced_id      orders.order_id%TYPE;  -- SERVICE_ID set, but not priced
+    v_order_priced_id        orders.order_id%TYPE;  -- priced, but no Stripe link yet
+    v_order_wrong_status_id  orders.order_id%TYPE;  -- priced, but already Payment Received (TASK-031)
 
     PROCEDURE report(p_test_name IN VARCHAR2, p_passed IN BOOLEAN, p_detail IN VARCHAR2 DEFAULT NULL) IS
     BEGIN
@@ -123,9 +129,29 @@ BEGIN
 
     pkg_pricing.price_order(p_order_id => v_order_priced_id, p_service_id => v_service_id);
 
+    -- TASK-031: priced order, but already moved past Awaiting Payment --
+    -- everything create_payment_link would otherwise need is present
+    -- (SERVICE_ID, SERVICE_PRICE, RETURN_SHIPPING_FEE), only the status is
+    -- wrong.
+    INSERT INTO orders (
+        tracking_token, status, vehicle_id, category_id, part_number_entered,
+        service_id, description, customer_name, customer_email, customer_phone,
+        return_address_street, return_address_city, return_address_state, return_address_zip,
+        idempotency_key
+    ) VALUES (
+        'TEST-TOKEN-030-D-' || DBMS_RANDOM.STRING('U', 20), 'Payment Received', v_vehicle_id, v_category_id, 'test-pn-030-d',
+        v_service_id, 'Already-paid fixture order for TASK-031 tests',
+        'Test Customer', 'test.customer@example.com', '808-555-0100',
+        '123 Test St', 'Honolulu', 'HI', '96813',
+        'TEST-IDEMP-030-D-' || DBMS_RANDOM.STRING('U', 20)
+    ) RETURNING order_id INTO v_order_wrong_status_id;
+
+    pkg_pricing.price_order(p_order_id => v_order_wrong_status_id, p_service_id => v_service_id);
+
     DBMS_OUTPUT.PUT_LINE('Fixtures created: category=' || v_category_id || ' vehicle=' || v_vehicle_id
         || ' service=' || v_service_id || ' order_unmatched=' || v_order_unmatched_id
-        || ' order_unpriced=' || v_order_unpriced_id || ' order_priced=' || v_order_priced_id);
+        || ' order_unpriced=' || v_order_unpriced_id || ' order_priced=' || v_order_priced_id
+        || ' order_wrong_status=' || v_order_wrong_status_id);
     DBMS_OUTPUT.PUT_LINE('----------------------------------------------------------------');
 
     ----------------------------------------------------------------------
@@ -188,6 +214,26 @@ BEGIN
     END;
 
     ----------------------------------------------------------------------
+    -- create_payment_link: order is priced and has a SERVICE_ID, but is
+    -- not in Awaiting Payment status (TASK-031).
+    ----------------------------------------------------------------------
+    DECLARE
+        v_dummy  VARCHAR2(500);
+        v_raised BOOLEAN := FALSE;
+        v_detail VARCHAR2(4000);
+    BEGIN
+        BEGIN
+            v_dummy := pkg_stripe.create_payment_link(v_order_wrong_status_id);
+        EXCEPTION
+            WHEN OTHERS THEN
+                v_raised := TRUE;
+                v_detail := SQLERRM;
+        END;
+        report('create_payment_link rejects a priced order that is not in Awaiting Payment status (ORA-20096)',
+               v_raised AND mentions_code(v_detail, -20096), v_detail);
+    END;
+
+    ----------------------------------------------------------------------
     -- get_payment_link_status: unknown order_id
     ----------------------------------------------------------------------
     DECLARE
@@ -230,13 +276,13 @@ BEGIN
     -- Summary + cleanup
     ----------------------------------------------------------------------
     DBMS_OUTPUT.PUT_LINE('----------------------------------------------------------------');
-    DBMS_OUTPUT.PUT_LINE('TASK-030 pkg_stripe guard-clause tests: ' || v_pass_count || ' passed, ' || v_fail_count || ' failed.');
+    DBMS_OUTPUT.PUT_LINE('TASK-030/TASK-031 pkg_stripe guard-clause tests: ' || v_pass_count || ' passed, ' || v_fail_count || ' failed.');
     DBMS_OUTPUT.PUT_LINE('NOTE: the actual Stripe create/read round-trip is NOT covered here -- see this file''s header comment.');
 
     ROLLBACK; -- discard every fixture row above.
 
     IF v_fail_count > 0 THEN
-        RAISE_APPLICATION_ERROR(-20099, v_fail_count || ' of ' || (v_pass_count + v_fail_count) || ' TASK-030 pkg_stripe tests FAILED -- see DBMS_OUTPUT above.');
+        RAISE_APPLICATION_ERROR(-20099, v_fail_count || ' of ' || (v_pass_count + v_fail_count) || ' TASK-030/TASK-031 pkg_stripe tests FAILED -- see DBMS_OUTPUT above.');
     END IF;
 END;
 /

@@ -5,6 +5,10 @@
 -- email #3 (MODULE_RECEIVED) on the transition to Block Received and email
 -- #4 (SHIPPED_BACK) on the transition to Ready / Shipped Back. No public
 -- signature changed by this task.
+-- TASK-031: filled in on_status_changed's last remaining branch -- on the
+-- transition to Awaiting Payment, creates the Stripe Payment Link
+-- (pkg_stripe.create_payment_link) and sends email #2 (PAYMENT_LINK). No
+-- public signature changed by this task either.
 --
 -- The single place that is allowed to change ORDERS.STATUS -- enforced by
 -- TRG_ORDERS_STATUS_GUARD (050_triggers.sql, TASK-006), which rejects any
@@ -42,10 +46,19 @@ CREATE OR REPLACE PACKAGE pkg_order_status AUTHID DEFINER AS
     -- order's current status, applies it (authorized via
     -- PKG_ORDER_STATUS_CTX so TRG_ORDERS_STATUS_GUARD allows the UPDATE),
     -- writes an ORDER_STATUS_HISTORY row, then calls the on_status_changed
-    -- hook (TASK-029: sends emails #3/#4 for the two statuses that need
-    -- one; a no-op for every other status). Raises a readable error -- and
+    -- hook (TASK-029/031: sends emails #2/#3/#4 for the three statuses that
+    -- need one, and creates the Stripe Payment Link for Awaiting Payment;
+    -- a no-op for every other status). Raises a readable error -- and
     -- leaves ORDERS.STATUS unchanged -- on an invalid transition or an
     -- unknown order id.
+    --
+    -- TASK-031: a change_status call that moves an order TO Awaiting
+    -- Payment therefore also creates that order's Stripe Payment Link as
+    -- part of the same call (via the hook) -- there is no separate step
+    -- the caller needs to take. A notification/Stripe failure in the hook
+    -- is logged (APP_ERROR_LOG) and swallowed, never raised back to this
+    -- procedure's caller -- see pkg_order_status.pkb's on_status_changed
+    -- comment for why.
     --
     -- p_changed_by: explicit actor (e.g. 'SYSTEM' from the Stripe webhook,
     -- TASK-032). NULL (the default) resolves to the live APEX session's

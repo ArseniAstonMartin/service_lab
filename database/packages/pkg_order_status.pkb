@@ -2,6 +2,8 @@
 -- pkg_order_status.pkb
 -- TASK-012: order status state machine, history and a notification hook.
 -- TASK-029: fills in on_status_changed with emails #3/#4.
+-- TASK-031: fills in on_status_changed's Awaiting Payment branch --
+-- creates the Stripe Payment Link and sends email #2.
 -- See pkg_order_status.pks for the public contract and design rationale.
 -- ============================================================================
 CREATE OR REPLACE PACKAGE BODY pkg_order_status AS
@@ -87,6 +89,20 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_status AS
     -- Notification hook, called by change_status after every successful
     -- status change and its ORDER_STATUS_HISTORY row.
     --
+    -- TASK-031: on the transition to Awaiting Payment, creates the Stripe
+    -- Payment Link (pkg_stripe.create_payment_link -- by this point
+    -- ORDERS.STATUS has already been updated to Awaiting Payment by
+    -- change_status above, which is exactly the status
+    -- create_payment_link's own guard clause requires) and sends email #2
+    -- (PAYMENT_LINK, to the customer) with the link plus a price summary
+    -- (SERVICE_NAME, SERVICE_PRICE, RETURN_SHIPPING_FEE, TOTAL_AMOUNT, each
+    -- of the three amounts formatted as a plain decimal string). No
+    -- separate exactly-once check is needed for the link itself --
+    -- create_payment_link is already idempotent (re-fetches and returns
+    -- the existing link's URL rather than creating a second one) -- and the
+    -- email itself still goes through pkg_notify.send_once like every
+    -- other email from this hook.
+    --
     -- TASK-029: sends email #3 (MODULE_RECEIVED, to the customer) on the
     -- transition to Block Received, and email #4 (SHIPPED_BACK, to the
     -- customer) on the transition to Ready / Shipped Back -- including
@@ -94,23 +110,26 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_status AS
     -- moving an order to this status, but change_status does not require
     -- it, so this reads whatever is on the row at the moment of the
     -- transition rather than requiring it as a parameter). No email for
-    -- any other status, including In Progress, matching this task's own
+    -- any other status, including In Progress, matching TASK-029's own
     -- acceptance criteria ("No email for In Progress or any other status").
-    -- Both sends go through pkg_notify.send_once, so a change_status call
-    -- that somehow re-fires the same transition (there is no legitimate way
-    -- to today, since TRG_ORDERS_STATUS_GUARD only allows a real status
-    -- change, but the guarantee costs nothing to keep) can never double-
-    -- send.
-    --
-    -- Still empty for TASK-031's Awaiting Payment / email #2 case -- that
-    -- task adds its own branch here (and the Stripe payment-link creation
-    -- alongside it) without needing to touch this task's two branches.
+    -- All three sends go through pkg_notify.send_once, so a change_status
+    -- call that somehow re-fires the same transition (there is no
+    -- legitimate way to today, since TRG_ORDERS_STATUS_GUARD only allows a
+    -- real status change, but the guarantee costs nothing to keep) can
+    -- never double-send.
     --
     -- The whole notification step is wrapped in WHEN OTHERS -> log_error,
     -- exactly like TASK-028's pkg_order.send_order_notifications: a
-    -- notification bug must never roll back or fail the status change
-    -- itself, which by this point has already committed-worthy work behind
-    -- it (the UPDATE and the ORDER_STATUS_HISTORY INSERT).
+    -- notification (or, for Awaiting Payment, Stripe) failure must never
+    -- roll back or fail the status change itself, which by this point has
+    -- already committed-worthy work behind it (the UPDATE and the
+    -- ORDER_STATUS_HISTORY INSERT). A Stripe API failure inside
+    -- create_payment_link is already logged once by pkg_stripe's own
+    -- log_error before it raises -- this handler's log_error then adds a
+    -- second, PKG_ORDER_STATUS-sourced row for the same failure, which is
+    -- deliberate, not a duplication bug: it records that the failure
+    -- specifically happened during this transition's hook, not merely
+    -- somewhere inside pkg_stripe.
     ----------------------------------------------------------------------------
     PROCEDURE on_status_changed(
         p_order_id    IN NUMBER,
@@ -119,9 +138,39 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_status AS
         p_comment     IN VARCHAR2
     ) IS
         l_return_tracking_no  orders.return_tracking_no%TYPE;
+        l_payment_url         VARCHAR2(500);
+        l_service_name        service.name%TYPE;
+        l_service_price       orders.service_price%TYPE;
+        l_return_fee          orders.return_shipping_fee%TYPE;
+        l_total_amount        orders.total_amount%TYPE;
         l_extra_json          CLOB;
     BEGIN
-        IF p_new_status = 'Block Received' THEN
+        IF p_new_status = 'Awaiting Payment' THEN
+            l_payment_url := pkg_stripe.create_payment_link(p_order_id => p_order_id);
+
+            SELECT sv.name, o.service_price, o.return_shipping_fee, o.total_amount
+              INTO l_service_name, l_service_price, l_return_fee, l_total_amount
+              FROM orders o
+              JOIN service sv ON sv.service_id = o.service_id
+             WHERE o.order_id = p_order_id;
+
+            SELECT JSON_OBJECT(
+                       'PAYMENT_URL'         VALUE l_payment_url,
+                       'SERVICE_NAME'        VALUE l_service_name,
+                       'SERVICE_PRICE'       VALUE TO_CHAR(l_service_price, 'FM999999990.00'),
+                       'RETURN_SHIPPING_FEE' VALUE TO_CHAR(l_return_fee, 'FM999999990.00'),
+                       'TOTAL_AMOUNT'        VALUE TO_CHAR(l_total_amount, 'FM999999990.00')
+                       RETURNING CLOB)
+              INTO l_extra_json
+              FROM dual;
+
+            pkg_notify.send_once(
+                p_order_id           => p_order_id,
+                p_email_type         => 'PAYMENT_LINK',
+                p_extra_placeholders => l_extra_json
+            );
+
+        ELSIF p_new_status = 'Block Received' THEN
             pkg_notify.send_once(p_order_id => p_order_id, p_email_type => 'MODULE_RECEIVED');
 
         ELSIF p_new_status = 'Ready / Shipped Back' THEN
@@ -139,10 +188,8 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_status AS
                 p_extra_placeholders => l_extra_json
             );
         END IF;
-        -- Every other status (Pending Review, Awaiting Payment, Payment
-        -- Received, In Progress, Completed): no email from this hook.
-        -- Awaiting Payment's email #2 is TASK-031's own branch, not yet
-        -- added here.
+        -- Every other status (Pending Review, Payment Received, In
+        -- Progress, Completed): no email from this hook.
     EXCEPTION
         WHEN OTHERS THEN
             log_error(
