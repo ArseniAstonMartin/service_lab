@@ -130,6 +130,74 @@ default for all workspaces.
 5. Create an admin user for f94517 under Administration → Manage Users (no
    public self sign-up — see TASK-034).
 
+## Bulk compatibility import (TASK-044)
+
+`pkg_import` loads a CSV file of known-good vehicle/Part Number/service
+combinations into the live compatibility catalog (`COMPATIBILITY_ENTRY`/
+`COMPATIBILITY_SERVICE`, both with `SOURCE = 'IMPORT'`) in three steps —
+`pkg_import.start_batch` (stage), `validate_batch` (mark each row VALID/
+INVALID with a reason), `apply_batch` (MERGE the VALID rows in). A staging
+table, `COMPAT_IMPORT_STG`, holds every row between these steps so a bad
+row can be diagnosed — and, once TASK-045's f94517 Page 31 exists, previewed
+— before anything is committed to the live catalog.
+
+### CSV format
+
+One row per (vehicle, category, Part Number) combination, six columns:
+
+| Column           | Required | Format                                                                 |
+|-------------------|----------|-------------------------------------------------------------------------|
+| `MAKE`            | yes      | Free text, ≤ 50 characters.                                             |
+| `MODEL`           | yes      | Free text, ≤ 50 characters.                                             |
+| `YEAR`            | yes      | A single 4-digit model year, 1980–2100 — **not** a range. A Make/Model spanning several years needs one row per year (matching how `VEHICLE_REF` itself stores one row per model year, not a `YEAR_FROM`/`YEAR_TO` range). |
+| `CATEGORY`        | yes      | One of the 5 fixed module categories (`Airbag/SRS`, `ECM/PCM`, `TCM/TCU`, `BCM`, `Instrument Cluster`) — matched case-insensitively. |
+| `PART_NUMBER`     | yes      | The Part Number this row confirms compatibility for, ≤ 100 characters. Normalized to `UPPER(TRIM())` on write, same as everywhere else in this schema. |
+| `SERVICE_NAMES`   | yes      | One or more `SERVICE.NAME` values confirmed supported for this Part Number, **pipe-separated** (e.g. `Cloning\|VIN Write`) — matched case-insensitively against services in the row's own `CATEGORY` only; a service name that exists but belongs to a different category is still an error. |
+
+Example:
+
+```csv
+MAKE,MODEL,YEAR,CATEGORY,PART_NUMBER,SERVICE_NAMES
+Toyota,Camry,2018,ECM/PCM,89661-0XXXX,Cloning|VIN Write
+Honda,Civic,2019,Airbag/SRS,77960-TBA-A01,Crash Data Reset
+```
+
+### Workflow
+
+1. Parse the uploaded CSV into `pkg_import.t_row_input_tab` (one entry per
+   data row, header excluded) and call `start_batch` — returns a
+   `BATCH_ID` (format `IMPB-<timestamp>-<random>`) and stages every row as
+   `PENDING`, unvalidated.
+2. Call `validate_batch(batch_id)`. Every `PENDING` row becomes `VALID` or
+   `INVALID`; an `INVALID` row's `ERROR_TEXT` lists every problem found
+   with it (missing/oversized field, bad year, unknown category, unknown
+   or wrong-category service name, ...), not just the first.
+3. (TASK-045) Preview the batch — `TABLE(pkg_import.get_batch_rows(batch_id))`
+   — so an admin can see each row's status/error before committing.
+4. Call `apply_batch(batch_id, applied_count, skipped_count)`. Every
+   `VALID` row is MERGEd into `VEHICLE_REF`/`COMPATIBILITY_ENTRY`/
+   `COMPATIBILITY_SERVICE` and marked `APPLIED`; every non-`VALID` row is
+   left alone and counted in `skipped_count`. Safe to call more than once
+   on the same batch (a second call applies nothing further, since no
+   `VALID` rows remain) and safe to import overlapping data across several
+   batches over time — every write is a `MERGE` on the same natural/unique
+   keys those tables already enforce, so nothing is ever duplicated.
+
+Two provenance rules worth knowing when mixing imports with admin review
+(`pkg_review.confirm_compatibility`, TASK-040):
+
+- An import **never downgrades** an entry an admin already confirmed
+  (`SOURCE = 'ADMIN_CONFIRMED'`) back to `'IMPORT'` — an admin's explicit
+  per-order confirmation is treated as the stronger signal, in either
+  direction (`pkg_review` DOES upgrade an `'IMPORT'` entry to
+  `'ADMIN_CONFIRMED'` when an admin confirms it).
+- An import's service links are **additive only** — it adds a link if
+  missing, but never removes one that's already there. This is the
+  opposite of `pkg_review.confirm_compatibility`, which fully replaces the
+  linked-service set for the one order it's confirming; an import is
+  understood as "here is more confirmed data", not "here is the complete,
+  authoritative list".
+
 ## Always Free considerations (TASK-050)
 
 An Always Free ATP instance can be reclaimed after a period of inactivity.

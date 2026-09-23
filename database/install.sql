@@ -68,8 +68,8 @@ PROMPT --- Packages: specs + bodies ---
 @@packages/pkg_stripe.pkb
 @@packages/pkg_review.pks
 @@packages/pkg_review.pkb
--- @@packages/pkg_import.pks
--- @@packages/pkg_import.pkb
+@@packages/pkg_import.pks
+@@packages/pkg_import.pkb
 
 PROMPT --- Seed data ---
 @@seed/010_reference_data.sql
