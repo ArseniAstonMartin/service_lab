@@ -52,8 +52,8 @@ PROMPT --- DDL: import staging (bulk compatibility import) ---
 PROMPT --- Packages: specs + bodies ---
 -- Each package below is added by its own TASK-0xx; @@ lines are appended
 -- here as they land so install.sql always reflects what actually exists.
--- @@packages/pkg_security.pks
--- @@packages/pkg_security.pkb
+@@packages/pkg_security.pks
+@@packages/pkg_security.pkb
 -- @@packages/pkg_order_status.pks
 -- @@packages/pkg_order_status.pkb
 -- @@packages/pkg_compat.pks
