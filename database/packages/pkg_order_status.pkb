@@ -1,6 +1,7 @@
 -- ============================================================================
 -- pkg_order_status.pkb
 -- TASK-012: order status state machine, history and a notification hook.
+-- TASK-029: fills in on_status_changed with emails #3/#4.
 -- See pkg_order_status.pks for the public contract and design rationale.
 -- ============================================================================
 CREATE OR REPLACE PACKAGE BODY pkg_order_status AS
@@ -59,18 +60,57 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_status AS
     END current_actor;
 
     ----------------------------------------------------------------------------
+    -- log_error (private)
+    -- TASK-029. Same convention as pkg_stripe.log_error / pkg_order.log_error:
+    -- a small private, autonomous-transaction logger, since no shared
+    -- logging package exists yet. Used only by on_status_changed below, so
+    -- a bug in the notification step (building placeholders, a missing
+    -- Email Template, ...) can never surface as a change_status failure for
+    -- a status change that, by the time this runs, has already been
+    -- correctly written to ORDERS and ORDER_STATUS_HISTORY.
+    ----------------------------------------------------------------------------
+    PROCEDURE log_error(
+        p_source   IN VARCHAR2,
+        p_message  IN VARCHAR2,
+        p_order_id IN NUMBER DEFAULT NULL
+    ) IS
+        PRAGMA AUTONOMOUS_TRANSACTION;
+    BEGIN
+        INSERT INTO app_error_log (error_source, error_message, order_id)
+        VALUES (p_source, SUBSTR(p_message, 1, 4000), p_order_id);
+
+        COMMIT;
+    END log_error;
+
+    ----------------------------------------------------------------------------
     -- on_status_changed (private)
     -- Notification hook, called by change_status after every successful
     -- status change and its ORDER_STATUS_HISTORY row.
     --
-    -- Empty for TASK-012. Filled in by:
-    --   TASK-031: on the transition to Awaiting Payment -- create the Stripe
-    --             payment link (pkg_stripe) and send email #2.
-    --   TASK-029: on the transition to Block Received -- send email #3.
-    --             On the transition to Ready / Shipped Back -- send email #4.
-    -- Kept as a single hook point (rather than each of those tasks editing
-    -- change_status's own transition-validation logic) so that logic never
-    -- has to change again once notification behavior is added on top of it.
+    -- TASK-029: sends email #3 (MODULE_RECEIVED, to the customer) on the
+    -- transition to Block Received, and email #4 (SHIPPED_BACK, to the
+    -- customer) on the transition to Ready / Shipped Back -- including
+    -- RETURN_TRACKING_NO when the admin has set one (TASK-037 sets it when
+    -- moving an order to this status, but change_status does not require
+    -- it, so this reads whatever is on the row at the moment of the
+    -- transition rather than requiring it as a parameter). No email for
+    -- any other status, including In Progress, matching this task's own
+    -- acceptance criteria ("No email for In Progress or any other status").
+    -- Both sends go through pkg_notify.send_once, so a change_status call
+    -- that somehow re-fires the same transition (there is no legitimate way
+    -- to today, since TRG_ORDERS_STATUS_GUARD only allows a real status
+    -- change, but the guarantee costs nothing to keep) can never double-
+    -- send.
+    --
+    -- Still empty for TASK-031's Awaiting Payment / email #2 case -- that
+    -- task adds its own branch here (and the Stripe payment-link creation
+    -- alongside it) without needing to touch this task's two branches.
+    --
+    -- The whole notification step is wrapped in WHEN OTHERS -> log_error,
+    -- exactly like TASK-028's pkg_order.send_order_notifications: a
+    -- notification bug must never roll back or fail the status change
+    -- itself, which by this point has already committed-worthy work behind
+    -- it (the UPDATE and the ORDER_STATUS_HISTORY INSERT).
     ----------------------------------------------------------------------------
     PROCEDURE on_status_changed(
         p_order_id    IN NUMBER,
@@ -78,8 +118,39 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_status AS
         p_new_status  IN VARCHAR2,
         p_comment     IN VARCHAR2
     ) IS
+        l_return_tracking_no  orders.return_tracking_no%TYPE;
+        l_extra_json          CLOB;
     BEGIN
-        NULL; -- TASK-028/029/031 fill this in; intentionally empty for TASK-012.
+        IF p_new_status = 'Block Received' THEN
+            pkg_notify.send_once(p_order_id => p_order_id, p_email_type => 'MODULE_RECEIVED');
+
+        ELSIF p_new_status = 'Ready / Shipped Back' THEN
+            SELECT return_tracking_no INTO l_return_tracking_no
+              FROM orders
+             WHERE order_id = p_order_id;
+
+            SELECT JSON_OBJECT('RETURN_TRACKING_NO' VALUE l_return_tracking_no RETURNING CLOB)
+              INTO l_extra_json
+              FROM dual;
+
+            pkg_notify.send_once(
+                p_order_id           => p_order_id,
+                p_email_type         => 'SHIPPED_BACK',
+                p_extra_placeholders => l_extra_json
+            );
+        END IF;
+        -- Every other status (Pending Review, Awaiting Payment, Payment
+        -- Received, In Progress, Completed): no email from this hook.
+        -- Awaiting Payment's email #2 is TASK-031's own branch, not yet
+        -- added here.
+    EXCEPTION
+        WHEN OTHERS THEN
+            log_error(
+                p_source   => 'PKG_ORDER_STATUS.ON_STATUS_CHANGED',
+                p_message  => SQLERRM,
+                p_order_id => p_order_id
+            );
+            -- Deliberately swallowed -- see the procedure comment above.
     END on_status_changed;
 
     ----------------------------------------------------------------------------

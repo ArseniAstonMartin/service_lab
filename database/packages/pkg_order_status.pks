@@ -1,6 +1,10 @@
 -- ============================================================================
 -- pkg_order_status.pks
 -- TASK-012: order status state machine, history and a notification hook.
+-- TASK-029: filled in on_status_changed (see pkg_order_status.pkb) to send
+-- email #3 (MODULE_RECEIVED) on the transition to Block Received and email
+-- #4 (SHIPPED_BACK) on the transition to Ready / Shipped Back. No public
+-- signature changed by this task.
 --
 -- The single place that is allowed to change ORDERS.STATUS -- enforced by
 -- TRG_ORDERS_STATUS_GUARD (050_triggers.sql, TASK-006), which rejects any
@@ -37,10 +41,11 @@ CREATE OR REPLACE PACKAGE pkg_order_status AUTHID DEFINER AS
     -- Validates p_new_status is the (only) allowed next status for the
     -- order's current status, applies it (authorized via
     -- PKG_ORDER_STATUS_CTX so TRG_ORDERS_STATUS_GUARD allows the UPDATE),
-    -- writes an ORDER_STATUS_HISTORY row, then calls the (currently empty)
-    -- on_status_changed hook. Raises a readable error -- and leaves
-    -- ORDERS.STATUS unchanged -- on an invalid transition or an unknown
-    -- order id.
+    -- writes an ORDER_STATUS_HISTORY row, then calls the on_status_changed
+    -- hook (TASK-029: sends emails #3/#4 for the two statuses that need
+    -- one; a no-op for every other status). Raises a readable error -- and
+    -- leaves ORDERS.STATUS unchanged -- on an invalid transition or an
+    -- unknown order id.
     --
     -- p_changed_by: explicit actor (e.g. 'SYSTEM' from the Stripe webhook,
     -- TASK-032). NULL (the default) resolves to the live APEX session's

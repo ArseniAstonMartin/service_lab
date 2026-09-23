@@ -14,6 +14,14 @@
 -- order offering no next status, an unknown order id being rejected, and
 -- CHANGED_BY resolving to 'SYSTEM' by default (no APEX session in this
 -- script) vs. an explicit p_changed_by override.
+--
+-- TASK-029: added EMAIL_LOG assertions for the transition to Block Received
+-- (email #3, MODULE_RECEIVED) and to Ready / Shipped Back (email #4,
+-- SHIPPED_BACK, with a RETURN_TRACKING_NO set beforehand), plus a final
+-- check that no OTHER transition in the walk (Awaiting Payment, Payment
+-- Received, In Progress, Completed) wrote an EMAIL_LOG row of its own --
+-- EMAIL_LOG should show exactly these 2 rows for the fixture order by the
+-- end of the happy path.
 -- ============================================================================
 
 SET SERVEROUTPUT ON SIZE UNLIMITED
@@ -182,6 +190,29 @@ BEGIN
             report('change_status defaults CHANGED_BY to SYSTEM outside an APEX session', FALSE, SQLERRM);
     END;
 
+    -- TASK-029: the transition just above (-> Block Received) must have
+    -- sent exactly one MODULE_RECEIVED email to the customer, via
+    -- on_status_changed -> pkg_notify.send_once.
+    DECLARE
+        v_email_count  PLS_INTEGER;
+        v_recipient    email_log.recipient%TYPE;
+    BEGIN
+        SELECT COUNT(*) INTO v_email_count
+          FROM email_log
+         WHERE order_id = v_order_id AND email_type = 'MODULE_RECEIVED';
+
+        SELECT recipient INTO v_recipient
+          FROM email_log
+         WHERE order_id = v_order_id AND email_type = 'MODULE_RECEIVED' AND ROWNUM = 1;
+
+        report('change_status: -> Block Received sends exactly one MODULE_RECEIVED email to the customer',
+               v_email_count = 1 AND v_recipient = 'test.customer@example.com',
+               'count=' || v_email_count || ' recipient=' || v_recipient);
+    EXCEPTION
+        WHEN OTHERS THEN
+            report('change_status: -> Block Received sends exactly one MODULE_RECEIVED email to the customer', FALSE, SQLERRM);
+    END;
+
     -- Explicit p_changed_by override (e.g. how TASK-032's Stripe webhook
     -- handler will call this for a system-driven transition).
     DECLARE
@@ -204,8 +235,54 @@ BEGIN
             report('change_status honors an explicit p_changed_by override', FALSE, SQLERRM);
     END;
 
+    -- TASK-029: set RETURN_TRACKING_NO the way TASK-037's admin page will
+    -- when it moves an order to Ready / Shipped Back (a direct UPDATE --
+    -- TRG_ORDERS_STATUS_GUARD only guards the STATUS column, not this one),
+    -- so the SHIPPED_BACK email below has a real value to carry.
+    UPDATE orders SET return_tracking_no = 'TEST-RETURN-TRACKING-029' WHERE order_id = v_order_id;
+
     expect_transition_ok('change_status: In Progress -> Ready / Shipped Back', v_order_id, 'Ready / Shipped Back');
+
+    -- TASK-029: the transition just above must have sent exactly one
+    -- SHIPPED_BACK email to the customer.
+    DECLARE
+        v_email_count  PLS_INTEGER;
+        v_recipient    email_log.recipient%TYPE;
+    BEGIN
+        SELECT COUNT(*) INTO v_email_count
+          FROM email_log
+         WHERE order_id = v_order_id AND email_type = 'SHIPPED_BACK';
+
+        SELECT recipient INTO v_recipient
+          FROM email_log
+         WHERE order_id = v_order_id AND email_type = 'SHIPPED_BACK' AND ROWNUM = 1;
+
+        report('change_status: -> Ready / Shipped Back sends exactly one SHIPPED_BACK email to the customer',
+               v_email_count = 1 AND v_recipient = 'test.customer@example.com',
+               'count=' || v_email_count || ' recipient=' || v_recipient);
+    EXCEPTION
+        WHEN OTHERS THEN
+            report('change_status: -> Ready / Shipped Back sends exactly one SHIPPED_BACK email to the customer', FALSE, SQLERRM);
+    END;
+
     expect_transition_ok('change_status: Ready / Shipped Back -> Completed', v_order_id, 'Completed');
+
+    -- TASK-029: across the ENTIRE happy-path walk above (7 statuses, 6
+    -- transitions), only Block Received and Ready / Shipped Back should
+    -- have produced an EMAIL_LOG row -- Awaiting Payment, Payment Received,
+    -- In Progress and Completed must each be a no-op for this hook (TASK-029
+    -- acceptance criteria: "No email for In Progress or any other status").
+    DECLARE
+        v_total_count  PLS_INTEGER;
+    BEGIN
+        SELECT COUNT(*) INTO v_total_count FROM email_log WHERE order_id = v_order_id;
+
+        report('EMAIL_LOG has exactly 2 rows for the fixture order after the full happy-path walk (MODULE_RECEIVED + SHIPPED_BACK only)',
+               v_total_count = 2, 'total=' || v_total_count);
+    EXCEPTION
+        WHEN OTHERS THEN
+            report('EMAIL_LOG has exactly 2 rows for the fixture order after the full happy-path walk (MODULE_RECEIVED + SHIPPED_BACK only)', FALSE, SQLERRM);
+    END;
 
     ----------------------------------------------------------------------
     -- Terminal status: no next status, and no further transition allowed
@@ -258,12 +335,12 @@ BEGIN
     -- Summary + cleanup
     ----------------------------------------------------------------------
     DBMS_OUTPUT.PUT_LINE('----------------------------------------------------------------');
-    DBMS_OUTPUT.PUT_LINE('TASK-012 pkg_order_status tests: ' || v_pass_count || ' passed, ' || v_fail_count || ' failed.');
+    DBMS_OUTPUT.PUT_LINE('TASK-012/TASK-029 pkg_order_status tests: ' || v_pass_count || ' passed, ' || v_fail_count || ' failed.');
 
-    ROLLBACK; -- discard every fixture row and status change above.
+    ROLLBACK; -- discard every fixture row, status change and EMAIL_LOG row above.
 
     IF v_fail_count > 0 THEN
-        RAISE_APPLICATION_ERROR(-20099, v_fail_count || ' of ' || (v_pass_count + v_fail_count) || ' TASK-012 pkg_order_status tests FAILED -- see DBMS_OUTPUT above.');
+        RAISE_APPLICATION_ERROR(-20099, v_fail_count || ' of ' || (v_pass_count + v_fail_count) || ' TASK-012/TASK-029 pkg_order_status tests FAILED -- see DBMS_OUTPUT above.');
     END IF;
 END;
 /
