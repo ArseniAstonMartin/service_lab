@@ -72,8 +72,8 @@ PROMPT --- Packages: specs + bodies ---
 -- @@packages/pkg_import.pkb
 
 PROMPT --- Seed data ---
--- @@seed/010_reference_data.sql
--- @@seed/020_test_compatibility.sql
+@@seed/010_reference_data.sql
+@@seed/020_test_compatibility.sql
 
 PROMPT --- ORDS REST modules ---
 -- @@ords/stripe_webhook.sql
