@@ -64,8 +64,8 @@ PROMPT --- Packages: specs + bodies ---
 @@packages/pkg_order.pkb
 -- @@packages/pkg_notify.pks
 -- @@packages/pkg_notify.pkb
--- @@packages/pkg_stripe.pks
--- @@packages/pkg_stripe.pkb
+@@packages/pkg_stripe.pks
+@@packages/pkg_stripe.pkb
 -- @@packages/pkg_review.pks
 -- @@packages/pkg_review.pkb
 -- @@packages/pkg_import.pks
