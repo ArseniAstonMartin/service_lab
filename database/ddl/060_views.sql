@@ -4,16 +4,16 @@
 --
 -- Creates:
 --   V_VEHICLE_LOV     - Make/Model/Year combinations that have at least one
---                        COMPATIBILITY_ENTRY (f100 Page 10 cascading LOVs,
+--                        COMPATIBILITY_ENTRY (f92606 Page 10 cascading LOVs,
 --                        TASK-016). Vehicles with zero compatibility entries
 --                        are deliberately excluded -- offering them in the
 --                        wizard would only ever lead to "no match".
 --   V_ORDER_ADMIN     - one row per order, with vehicle/category/service and
---                        current status already joined, for f200 Page 10's
+--                        current status already joined, for f94517 Page 10's
 --                        Interactive Report (TASK-035) and v_order_admin-based
 --                        reports.
 --   V_COMPAT_CATALOG  - one row per COMPATIBILITY_ENTRY, with a LISTAGG of its
---                        supported service names, for f200 Page 30's
+--                        supported service names, for f94517 Page 30's
 --                        Compatibility DB Interactive Grid (TASK-043).
 --
 -- Depends on 010_reference_tables.sql, 020_order_tables.sql and
@@ -44,13 +44,13 @@ WHERE  EXISTS (
            WHERE  ce.vehicle_id = vr.vehicle_id
        );
 
-COMMENT ON TABLE v_vehicle_lov IS 'Make/Model/Year combinations that have at least one COMPATIBILITY_ENTRY. Source for the f100 Page 10 cascading Make -> Model -> Year LOVs (TASK-016); a vehicle with zero compatibility entries is never offered.';
+COMMENT ON TABLE v_vehicle_lov IS 'Make/Model/Year combinations that have at least one COMPATIBILITY_ENTRY. Source for the f92606 Page 10 cascading Make -> Model -> Year LOVs (TASK-016); a vehicle with zero compatibility entries is never offered.';
 
 -- ----------------------------------------------------------------------------
 -- V_ORDER_ADMIN
 -- One row per order: vehicle, category, service, customer and pricing
 -- fields, plus the current status's display_seq/is_terminal from
--- ORDER_STATUS_REF (so f200 reports can sort/group by lifecycle stage
+-- ORDER_STATUS_REF (so f94517 reports can sort/group by lifecycle stage
 -- without re-encoding the status list). LEFT JOINs on vehicle/category are
 -- defensive only (ORDERS.vehicle_id/category_id are NOT NULL FKs and can
 -- never actually be orphaned); service/matched_entry_id are nullable
@@ -94,7 +94,7 @@ FROM   orders o
        JOIN order_status_ref  osr ON osr.status_code = o.status
        LEFT JOIN service      sv  ON sv.service_id = o.service_id;
 
-COMMENT ON TABLE v_order_admin IS 'One row per order with vehicle/category/service names and current-status metadata already joined. Source for f200 Page 10''s Interactive Report (TASK-035) -- search by order number/email/Part Number, filter/sort by status and date, per PRD 5.1.';
+COMMENT ON TABLE v_order_admin IS 'One row per order with vehicle/category/service names and current-status metadata already joined. Source for f94517 Page 10''s Interactive Report (TASK-035) -- search by order number/email/Part Number, filter/sort by status and date, per PRD 5.1.';
 
 -- ----------------------------------------------------------------------------
 -- V_COMPAT_CATALOG
@@ -102,7 +102,7 @@ COMMENT ON TABLE v_order_admin IS 'One row per order with vehicle/category/servi
 -- a comma-separated LISTAGG of its currently supported service names
 -- (alphabetical, so the column is stable/diffable across refreshes), and
 -- SOURCE. An entry with zero linked COMPATIBILITY_SERVICE rows still gets a
--- row here (LEFT JOIN) with an empty services list -- f200 Page 30
+-- row here (LEFT JOIN) with an empty services list -- f94517 Page 30
 -- (TASK-043) needs to show entries with "no services yet" so the admin can
 -- notice and fix them, not silently hide them.
 -- ----------------------------------------------------------------------------
@@ -124,4 +124,4 @@ FROM   compatibility_entry ce
        JOIN vehicle_ref     vr ON vr.vehicle_id = ce.vehicle_id
        JOIN module_category mc ON mc.category_id = ce.category_id;
 
-COMMENT ON TABLE v_compat_catalog IS 'One row per COMPATIBILITY_ENTRY with Make/Model/Year, category, Part Number, a LISTAGG of supported service names and SOURCE. Source for f200 Page 30''s read-only Compatibility DB Interactive Grid (TASK-043); entries with zero supported services still appear (NULL/empty SUPPORTED_SERVICES) so the admin can spot and fix them.';
+COMMENT ON TABLE v_compat_catalog IS 'One row per COMPATIBILITY_ENTRY with Make/Model/Year, category, Part Number, a LISTAGG of supported service names and SOURCE. Source for f94517 Page 30''s read-only Compatibility DB Interactive Grid (TASK-043); entries with zero supported services still appear (NULL/empty SUPPORTED_SERVICES) so the admin can spot and fix them.';

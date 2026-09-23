@@ -145,7 +145,7 @@ USING (
     SELECT 'RETURN_SHIPPING_FEE' AS setting_key, '25.00'                              AS setting_value, 'Flat return-shipping fee added to every order total (PRD 4.5/5.4: $20-30 range, admin-editable).' AS description FROM dual UNION ALL
     SELECT 'ADMIN_EMAIL',                         'admin@ecuservicelaboahu.example',                     'Recipient of email #5 (new order alert, PRD section 9). PLACEHOLDER -- replace with the real admin inbox before go-live.' FROM dual UNION ALL
     SELECT 'MAIL_FROM',                            'no-reply@ecuservicelaboahu.example',                  'APEX_MAIL sender address (PRD section 7). PLACEHOLDER -- replace with the approved/verified sender once SMTP relay is configured (TASK-027).' FROM dual UNION ALL
-    SELECT 'APP_BASE_URL',                          'https://apex.oracle.com/pls/apex/wksp_hawaiiautomotive/', 'Base URL used to build the public tracking link in customer emails (TASK-028). PLACEHOLDER -- confirm the exact f100 app alias/path once TASK-009 creates the app.' FROM dual
+    SELECT 'APP_BASE_URL',                          'https://apex.oracle.com/pls/apex/wksp_hawaiiautomotive/', 'Base URL used to build the public tracking link in customer emails (TASK-028). PLACEHOLDER -- confirm the exact f92606 app alias/path once TASK-009 creates the app.' FROM dual
 ) src
 ON (tgt.setting_key = src.setting_key)
 WHEN MATCHED THEN UPDATE SET

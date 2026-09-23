@@ -104,7 +104,7 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_status AS
         END IF;
         -- Terminal/unrecognized current status: pipes zero rows -- an empty
         -- LOV, exactly right for a Completed order (TASK-037's select list
-        -- on f200 Page 11 has nothing to offer).
+        -- on f94517 Page 11 has nothing to offer).
 
         RETURN;
     EXCEPTION

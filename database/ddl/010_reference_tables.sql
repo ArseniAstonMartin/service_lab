@@ -45,7 +45,7 @@ CREATE TABLE module_category (
 );
 
 COMMENT ON TABLE module_category IS 'Module categories: Airbag/SRS, ECM/PCM, TCM/TCU, BCM, Instrument Cluster.';
-COMMENT ON COLUMN module_category.display_seq IS 'Ordering hint for the f100 category radio group (TASK-016).';
+COMMENT ON COLUMN module_category.display_seq IS 'Ordering hint for the f92606 category radio group (TASK-016).';
 
 -- ----------------------------------------------------------------------------
 -- VEHICLE_REF
@@ -65,7 +65,7 @@ COMMENT ON COLUMN module_category.display_seq IS 'Ordering hint for the f100 cat
 --   - The bulk import (TASK-044) already normalizes external supported-
 --     module lists row by row; expanding a "2015-2019" source range into
 --     five VEHICLE_REF rows at import time is a one-line MERGE loop and
---     keeps every other package (pkg_compat, v_vehicle_lov, the f100
+--     keeps every other package (pkg_compat, v_vehicle_lov, the f92606
 --     cascading LOVs) working against plain equality.
 --   - A UNIQUE constraint on (MAKE, MODEL, YEAR) prevents duplicate vehicle
 --     rows, which a range model would need a separate overlap-detection

@@ -30,7 +30,7 @@ COMMENT ON COLUMN app_setting.setting_value IS 'Always stored as text; callers (
 
 -- ----------------------------------------------------------------------------
 -- QUESTION_DEF
--- Drives the dynamic, service-specific question set on f100 Page 13
+-- Drives the dynamic, service-specific question set on f92606 Page 13
 -- (PRD 4.4 / TASK-020). Data-driven by design: adding a new QUESTION_SET_CODE
 -- with its own rows needs no new page.
 -- ----------------------------------------------------------------------------
@@ -49,7 +49,7 @@ CREATE TABLE question_def (
 );
 
 COMMENT ON TABLE question_def IS 'Dynamic question definitions per QUESTION_SET_CODE (SRS, CLONING, VIN_WRITE, RESTORATION, FOLLOW_UP -- seeded in TASK-008 per PRD 4.4). SERVICE.QUESTION_SET_CODE picks which set of rows renders for a given service (TASK-020).';
-COMMENT ON COLUMN question_def.answer_type IS 'TEXT / YES_NO / TEXTAREA / PHOTO -- drives which item type f100 Page 13 renders for this question (TASK-020).';
+COMMENT ON COLUMN question_def.answer_type IS 'TEXT / YES_NO / TEXTAREA / PHOTO -- drives which item type f92606 Page 13 renders for this question (TASK-020).';
 COMMENT ON COLUMN question_def.is_required IS 'Y if leaving this question blank should fail the page-13 validation (TASK-020).';
 COMMENT ON COLUMN question_def.display_seq IS 'Ordering hint for rendering questions within a set.';
 

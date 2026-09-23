@@ -2,7 +2,7 @@
 -- pkg_order.pks
 -- TASK-015: atomic order creation for both submission paths.
 --
--- The single entry point the wizard's final "submit" step (f100 Page 15,
+-- The single entry point the wizard's final "submit" step (f92606 Page 15,
 -- TASK-022) calls. Everything a submission produces -- the ORDERS row, its
 -- photos, its dynamic-question answers and its first ORDER_STATUS_HISTORY
 -- row -- is written here, in one PL/SQL call, so a caller that does not

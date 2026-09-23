@@ -13,7 +13,7 @@ CREATE OR REPLACE PACKAGE pkg_compat AUTHID DEFINER AS
     -- Row/collection types for get_services, declared here (not in the
     -- body) so SQL can consume the pipelined function via
     -- TABLE(pkg_compat.get_services(:AI_MATCHED_ENTRY_ID)) -- the pattern
-    -- TASK-019's f100 service-selection Cards region will use as its source.
+    -- TASK-019's f92606 service-selection Cards region will use as its source.
     TYPE t_service_row IS RECORD (
         service_id   service.service_id%TYPE,
         name         service.name%TYPE,

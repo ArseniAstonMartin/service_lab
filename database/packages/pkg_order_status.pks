@@ -12,7 +12,7 @@ CREATE OR REPLACE PACKAGE pkg_order_status AUTHID DEFINER AS
     -- Row/collection types for get_next_statuses, declared here (not in the
     -- body) so SQL can consume the pipelined function via
     -- TABLE(pkg_order_status.get_next_statuses(:P_ORDER_ID)) -- the pattern
-    -- TASK-037's f200 admin select list will use as its LOV source.
+    -- TASK-037's f94517 admin select list will use as its LOV source.
     TYPE t_next_status_row IS RECORD (
         status_code  order_status_ref.status_code%TYPE,
         display_seq  order_status_ref.display_seq%TYPE

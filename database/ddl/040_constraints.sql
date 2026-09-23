@@ -123,5 +123,5 @@ ALTER TABLE orders
     ADD CONSTRAINT ck_orders_zip_format
         CHECK (REGEXP_LIKE(return_address_zip, '^[0-9]{5}(-[0-9]{4})?$'));
 
-COMMENT ON CONSTRAINT ck_orders_email_format ON orders IS 'Basic non-strict email shape check (local@domain.tld); mirrored by an APEX page-level validation on f100 Page 14 (TASK-021) for a friendlier inline message before this constraint would ever fire.';
-COMMENT ON CONSTRAINT ck_orders_zip_format ON orders IS 'US ZIP or ZIP+4 (5 digits, optional -4 digits); mirrored by an APEX page-level validation on f100 Page 14 (TASK-021).';
+COMMENT ON CONSTRAINT ck_orders_email_format ON orders IS 'Basic non-strict email shape check (local@domain.tld); mirrored by an APEX page-level validation on f92606 Page 14 (TASK-021) for a friendlier inline message before this constraint would ever fire.';
+COMMENT ON CONSTRAINT ck_orders_zip_format ON orders IS 'US ZIP or ZIP+4 (5 digits, optional -4 digits); mirrored by an APEX page-level validation on f92606 Page 14 (TASK-021).';

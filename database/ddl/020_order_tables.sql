@@ -74,7 +74,7 @@ COMMENT ON COLUMN orders.service_price IS 'Snapshot of PRICE_TIER.AMOUNT at the 
 COMMENT ON COLUMN orders.return_shipping_fee IS 'Snapshot of APP_SETTING''s return-shipping value at order time, same non-retroactive rule as SERVICE_PRICE.';
 COMMENT ON COLUMN orders.total_amount IS 'SERVICE_PRICE + RETURN_SHIPPING_FEE, snapshotted together by pkg_pricing (TASK-014). NULL until priced (i.e. while still Pending Review with no confirmed service).';
 COMMENT ON COLUMN orders.return_tracking_no IS 'Carrier tracking number for the return shipment, entered by the admin when moving an order to Ready / Shipped Back (TASK-037) and included in email #4 (TASK-029).';
-COMMENT ON COLUMN orders.idempotency_key IS 'Generated client-side when the review/submit page (f100 Page 15, TASK-022) loads; pkg_order.submit_order (TASK-015) uses it so a repeated/duplicate submit returns the existing order instead of inserting a second one.';
+COMMENT ON COLUMN orders.idempotency_key IS 'Generated client-side when the review/submit page (f92606 Page 15, TASK-022) loads; pkg_order.submit_order (TASK-015) uses it so a repeated/duplicate submit returns the existing order instead of inserting a second one.';
 COMMENT ON COLUMN orders.shipping_label IS 'Optional: a return shipping label the admin attaches once ready to ship back (TASK-038). NULL if none was attached -- the confirmation flow simply omits that piece (PRD section 8).';
 COMMENT ON COLUMN orders.stripe_payment_link_id IS 'Set by pkg_stripe.create_payment_link (TASK-030) on the transition to Awaiting Payment. NULL until then.';
 COMMENT ON COLUMN orders.stripe_payment_status IS 'Mirrors the Stripe payment link''s status; updated by the ORDS webhook handler (TASK-032/033).';
