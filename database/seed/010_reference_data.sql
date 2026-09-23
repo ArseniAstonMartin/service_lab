@@ -133,26 +133,30 @@ WHEN NOT MATCHED THEN INSERT (question_set_code, question_code, label, answer_ty
     VALUES (src.question_set_code, src.question_code, src.label, src.answer_type, src.is_required, src.display_seq);
 
 -- ----------------------------------------------------------------------------
--- APP_SETTING: the 4 keys the app actually reads (per the table comment in
+-- APP_SETTING: the 5 keys the app actually reads (per the table comment in
 -- 030_config_and_logs.sql). RETURN_SHIPPING_FEE is within the PRD 4.5/5.4
--- $20-30 range. ADMIN_EMAIL/MAIL_FROM/APP_BASE_URL are placeholder values
--- the business must replace with real addresses/domain before go-live --
--- flagged in each row's DESCRIPTION so an admin editing APP_SETTING later
--- sees the placeholder note, not just a bare value.
+-- $20-30 range. ADMIN_EMAIL/MAIL_FROM/APP_BASE_URL/STRIPE_WEBHOOK_SECRET are
+-- placeholder values the business must replace with real
+-- addresses/domain/secret before go-live -- flagged in each row's
+-- DESCRIPTION so an admin editing APP_SETTING later sees the placeholder
+-- note, not just a bare value.
 -- ----------------------------------------------------------------------------
 MERGE INTO app_setting tgt
 USING (
     SELECT 'RETURN_SHIPPING_FEE' AS setting_key, '25.00'                              AS setting_value, 'Flat return-shipping fee added to every order total (PRD 4.5/5.4: $20-30 range, admin-editable).' AS description FROM dual UNION ALL
     SELECT 'ADMIN_EMAIL',                         'admin@ecuservicelaboahu.example',                     'Recipient of email #5 (new order alert, PRD section 9). PLACEHOLDER -- replace with the real admin inbox before go-live.' FROM dual UNION ALL
     SELECT 'MAIL_FROM',                            'no-reply@ecuservicelaboahu.example',                  'APEX_MAIL sender address (PRD section 7). PLACEHOLDER -- replace with the approved/verified sender once SMTP relay is configured (TASK-027).' FROM dual UNION ALL
-    SELECT 'APP_BASE_URL',                          'https://apex.oracle.com/pls/apex/wksp_hawaiiautomotive/', 'Base URL used to build the public tracking link in customer emails (TASK-028). PLACEHOLDER -- confirm the exact f92606 app alias/path once TASK-009 creates the app.' FROM dual
+    SELECT 'APP_BASE_URL',                          'https://apex.oracle.com/pls/apex/wksp_hawaiiautomotive/', 'Base URL used to build the public tracking link in customer emails (TASK-028). PLACEHOLDER -- confirm the exact f92606 app alias/path once TASK-009 creates the app.' FROM dual UNION ALL
+    SELECT 'STRIPE_WEBHOOK_SECRET',                  'whsec_REPLACE_ME',                                    'HMAC signing secret for pkg_stripe.handle_event to verify inbound Stripe webhook deliveries (TASK-033). PLACEHOLDER -- replace with the real signing secret from the Stripe Dashboard (Developers -> Webhooks -> the registered database/ords/stripe_webhook.sql endpoint -> Signing secret) once that endpoint is registered; never commit the real value to this repository.' FROM dual
 ) src
 ON (tgt.setting_key = src.setting_key)
 WHEN MATCHED THEN UPDATE SET
     tgt.description = src.description
     -- Intentionally does NOT overwrite setting_value on MATCHED: once an
-    -- admin has edited a live setting (e.g. RETURN_SHIPPING_FEE), re-running
-    -- this seed script must not silently revert their change. Only a brand
-    -- new key gets its seed value; description stays in sync either way.
+    -- admin has edited a live setting (e.g. RETURN_SHIPPING_FEE, or having
+    -- replaced STRIPE_WEBHOOK_SECRET's placeholder with the real secret),
+    -- re-running this seed script must not silently revert their change.
+    -- Only a brand new key gets its seed value; description stays in sync
+    -- either way.
 WHEN NOT MATCHED THEN INSERT (setting_key, setting_value, description)
     VALUES (src.setting_key, src.setting_value, src.description);

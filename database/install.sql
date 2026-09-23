@@ -76,7 +76,7 @@ PROMPT --- Seed data ---
 @@seed/020_test_compatibility.sql
 
 PROMPT --- ORDS REST modules ---
--- @@ords/stripe_webhook.sql
+@@ords/stripe_webhook.sql
 
 PROMPT ==========================================================
 PROMPT ECU Service Lab -- install.sql finished successfully

@@ -6,6 +6,27 @@
 -- signature changed by this task; the payment-gate wiring itself (calling
 -- this from pkg_order_status on the transition, and email #2) lives in
 -- pkg_order_status.pkb.
+-- TASK-032/033: added handle_event -- the single entry point the
+-- database/ords/stripe_webhook.sql ORDS module calls for every inbound
+-- Stripe webhook delivery. See handle_event's own comment below for the
+-- signature-verification / idempotency design (TASK-033) and the event
+-- processing itself (TASK-032).
+--
+-- TASK-033 manual prerequisite, same shape as TASK-030's Web Credential
+-- above but for a different reason: Stripe's webhook signing secret
+-- (whsec_...) must be usable from PL/SQL to compute an HMAC ourselves (see
+-- handle_event), and APEX's Web Credentials are write-only from PL/SQL --
+-- APEX_WEB_SERVICE can attach one to an OUTBOUND request via
+-- p_credential_static_id, but there is no API to read a Web Credential's
+-- secret back out for a computation like this. So, per this task's own
+-- acceptance criteria ("Web Credential or protected APP_SETTING"), the
+-- webhook secret is instead stored as APP_SETTING.STRIPE_WEBHOOK_SECRET.
+-- The row seeded by database/seed/010_reference_data.sql is a PLACEHOLDER
+-- value ('whsec_REPLACE_ME') -- an admin must overwrite it with the real
+-- signing secret from the Stripe Dashboard (Developers -> Webhooks -> the
+-- registered endpoint -> Signing secret) directly in the live table once
+-- the ORDS endpoint below is registered and its public URL is known to
+-- give Stripe. The real secret is never committed to this repository.
 --
 -- Manual prerequisite (cannot be done from SQL -- this is exactly why PRD
 -- 10 / this task's acceptance criteria require it to live outside code and
@@ -87,6 +108,72 @@ CREATE OR REPLACE PACKAGE pkg_stripe AUTHID DEFINER AS
     -- create_payment_link).
     -- ------------------------------------------------------------------------
     FUNCTION get_payment_link_status(p_order_id IN NUMBER) RETURN VARCHAR2;
+
+    -- ------------------------------------------------------------------------
+    -- handle_event
+    -- TASK-032/033. Called by database/ords/stripe_webhook.sql's POST
+    -- handler for every Stripe webhook delivery, with the raw request body
+    -- (p_payload, exactly as Stripe sent it -- signature verification needs
+    -- the UNMODIFIED bytes, so the ORDS module must not re-serialize or
+    -- reformat it) and the raw Stripe-Signature request header
+    -- (p_signature_header). Never raises -- every outcome, including a
+    -- malformed request, is reported back through p_status_code/
+    -- p_response_body so the ORDS handler can set the HTTP response
+    -- without its own exception handling.
+    --
+    -- TASK-033 (checked first, before ANY database write):
+    --   1. p_signature_header must be present and parse into a t= (unix
+    --      timestamp) and at least one v1= (hex HMAC-SHA256 signature)
+    --      field.
+    --   2. Its HMAC-SHA256 (DBMS_CRYPTO.MAC, key = APP_SETTING.
+    --      STRIPE_WEBHOOK_SECRET) over "<t>.<raw body>" must match the v1=
+    --      value.
+    --   3. t= must be within c_timestamp_tolerance_seconds (see pkb) of the
+    --      current time, so a captured request can't be replayed
+    --      indefinitely.
+    --   A missing header, an unparseable header, a mismatched signature, an
+    --   unconfigured webhook secret, or a stale timestamp all fail
+    --   verification the same way: p_status_code := 400, nothing is written
+    --   to the database (TASK-033 acceptance criteria: "returns 400 and
+    --   changes nothing").
+    --
+    -- TASK-032/033 (once signature verification passes):
+    --   4. The event's own id (JSON $.id) is inserted into STRIPE_EVENT,
+    --      whose UNIQUE (event_id) constraint makes a retried/duplicate
+    --      Stripe delivery a no-op -- caught as DUP_VAL_ON_INDEX and
+    --      answered with a plain 200 (Stripe stops retrying), no
+    --      reprocessing.
+    --   5. Only $.type = 'checkout.session.completed' (how a paid Stripe
+    --      Payment Link surfaces to a webhook) is acted on -- every other
+    --      event type is still recorded in STRIPE_EVENT (for audit) but
+    --      otherwise ignored, answered 200 (TASK-032 acceptance criteria:
+    --      "ignores unknown event types").
+    --   6. For that event type, the order is resolved from
+    --      $.data.object.metadata.order_id (the metadata
+    --      create_payment_link, TASK-030, put on the Payment Link and that
+    --      Stripe carries onto the Checkout Session it creates), ORDERS.
+    --      STRIPE_PAYMENT_STATUS is updated from $.data.object.
+    --      payment_status, and pkg_order_status.change_status moves the
+    --      order to 'Payment Received' with p_changed_by => 'SYSTEM' (this
+    --      task's acceptance criteria).
+    --   7. Any failure resolving the order or advancing its status
+    --      (unresolvable order_id, an order already past Payment Received,
+    --      ...) is logged to APP_ERROR_LOG and swallowed -- the response is
+    --      still 200, since the event itself was validly received and
+    --      recorded (STRIPE_EVENT.PROCESSED stays 'N'); the alternative
+    --      (a non-2xx response) would just make Stripe retry the same
+    --      delivery forever for a problem retrying can't fix.
+    --
+    -- Responds quickly by design (TASK-032 acceptance criteria): every step
+    -- above is a handful of single-row lookups/updates and one CPU-bound
+    -- HMAC computation, no external calls.
+    -- ------------------------------------------------------------------------
+    PROCEDURE handle_event(
+        p_payload           IN  CLOB,
+        p_signature_header  IN  VARCHAR2,
+        p_status_code        OUT PLS_INTEGER,
+        p_response_body        OUT VARCHAR2
+    );
 
 END pkg_stripe;
 /

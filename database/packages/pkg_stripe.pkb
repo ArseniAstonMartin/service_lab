@@ -4,12 +4,21 @@
 -- TASK-031: create_payment_link now refuses an order not currently in
 -- Awaiting Payment status. See pkg_stripe.pks for the public contract, the
 -- required Web Credential setup, and design rationale.
+-- TASK-032/033: added handle_event (Stripe webhook entry point) plus its
+-- private helpers get_app_setting and verify_signature. See pks for the
+-- full design writeup; the short version is: verify_signature fails closed
+-- (returns FALSE) on anything it can't positively confirm -- missing
+-- header, unconfigured secret, unparseable t=/v1= fields, bad HMAC, or a
+-- stale timestamp -- and handle_event never writes to the database until
+-- that check passes.
 -- ============================================================================
 CREATE OR REPLACE PACKAGE BODY pkg_stripe AS
 
-    c_api_base              CONSTANT VARCHAR2(100) := 'https://api.stripe.com/v1';
-    c_credential_static_id  CONSTANT VARCHAR2(50)  := 'STRIPE_SECRET_KEY'; -- must match the Web Credential's Static ID (see pks)
-    c_currency              CONSTANT VARCHAR2(3)   := 'usd';
+    c_api_base                    CONSTANT VARCHAR2(100) := 'https://api.stripe.com/v1';
+    c_credential_static_id        CONSTANT VARCHAR2(50)  := 'STRIPE_SECRET_KEY'; -- must match the Web Credential's Static ID (see pks)
+    c_currency                    CONSTANT VARCHAR2(3)   := 'usd';
+    c_webhook_secret_setting_key  CONSTANT VARCHAR2(50)  := 'STRIPE_WEBHOOK_SECRET'; -- APP_SETTING.SETTING_KEY (see pks header)
+    c_timestamp_tolerance_seconds CONSTANT PLS_INTEGER   := 300; -- TASK-033: reject a Stripe-Signature t= older/newer than this many seconds
 
     ----------------------------------------------------------------------------
     -- log_error
@@ -214,6 +223,228 @@ CREATE OR REPLACE PACKAGE BODY pkg_stripe AS
 
         RETURN CASE WHEN JSON_VALUE(l_response, '$.active') = 'true' THEN 'ACTIVE' ELSE 'INACTIVE' END;
     END get_payment_link_status;
+
+    ----------------------------------------------------------------------------
+    -- get_app_setting
+    -- TASK-033. Same shape as pkg_notify.get_setting -- returns NULL (never
+    -- raises) for an unconfigured/missing key, so verify_signature can treat
+    -- "no webhook secret set yet" as just another reason to fail closed.
+    ----------------------------------------------------------------------------
+    FUNCTION get_app_setting(p_key IN VARCHAR2) RETURN VARCHAR2 IS
+        l_value app_setting.setting_value%TYPE;
+    BEGIN
+        SELECT setting_value INTO l_value FROM app_setting WHERE setting_key = p_key;
+        RETURN l_value;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RETURN NULL;
+    END get_app_setting;
+
+    ----------------------------------------------------------------------------
+    -- verify_signature
+    -- TASK-033. Verifies a Stripe-Signature header (format
+    -- "t=<unix ts>,v1=<hex hmac>[,v0=...]") against p_payload, using
+    -- APP_SETTING.STRIPE_WEBHOOK_SECRET as the HMAC key. Fails closed
+    -- (returns FALSE) on any of: missing/unparseable header, unconfigured
+    -- secret, non-numeric or out-of-tolerance timestamp, or a signature
+    -- mismatch -- never raises, so handle_event can treat every failure
+    -- mode identically (400, nothing written).
+    --
+    -- l_signed_payload is built as t || '.' || raw body and HMAC'd exactly
+    -- as Stripe computes it. It's a VARCHAR2(32767) local variable rather
+    -- than a table column, so it safely holds a full webhook payload (up to
+    -- ~32K bytes) regardless of this database's MAX_STRING_SIZE setting,
+    -- which only limits column widths, not local PL/SQL variables --
+    -- comfortably larger than any realistic checkout.session.completed
+    -- payload, so DBMS_LOB.SUBSTR here does not risk silently truncating a
+    -- real payload before it's signed.
+    --
+    -- Deliberately simplified relative to a production-grade webhook
+    -- verifier, both acceptable for this task's acceptance criteria: the
+    -- hex comparison is a plain string comparison rather than
+    -- constant-time (timing-attack resistance is not a stated requirement
+    -- here), and only the first v1= value is checked (no support for
+    -- Stripe's signing-secret rotation, where two v1= values can appear
+    -- briefly during rollover).
+    ----------------------------------------------------------------------------
+    FUNCTION verify_signature(
+        p_payload          IN CLOB,
+        p_signature_header IN VARCHAR2
+    ) RETURN BOOLEAN IS
+        l_webhook_secret  VARCHAR2(200);
+        l_timestamp_str   VARCHAR2(50);
+        l_provided_sig    VARCHAR2(200);
+        l_timestamp       PLS_INTEGER;
+        l_now_epoch       PLS_INTEGER;
+        l_signed_payload  VARCHAR2(32767);
+        l_computed_sig    VARCHAR2(64);
+    BEGIN
+        IF p_signature_header IS NULL THEN
+            RETURN FALSE;
+        END IF;
+
+        l_webhook_secret := get_app_setting(c_webhook_secret_setting_key);
+        IF l_webhook_secret IS NULL THEN
+            RETURN FALSE;
+        END IF;
+
+        l_timestamp_str := REGEXP_SUBSTR(p_signature_header, '(^|,)t=([^,]*)', 1, 1, NULL, 2);
+        l_provided_sig   := REGEXP_SUBSTR(p_signature_header, '(^|,)v1=([^,]*)', 1, 1, NULL, 2);
+
+        IF l_timestamp_str IS NULL OR l_provided_sig IS NULL THEN
+            RETURN FALSE;
+        END IF;
+
+        BEGIN
+            l_timestamp := TO_NUMBER(l_timestamp_str);
+        EXCEPTION
+            WHEN VALUE_ERROR THEN
+                RETURN FALSE;
+        END;
+
+        l_now_epoch := ROUND((CAST((SYSTIMESTAMP AT TIME ZONE 'UTC') AS DATE) - DATE '1970-01-01') * 86400);
+
+        IF ABS(l_now_epoch - l_timestamp) > c_timestamp_tolerance_seconds THEN
+            RETURN FALSE;
+        END IF;
+
+        l_signed_payload := l_timestamp_str || '.' || DBMS_LOB.SUBSTR(p_payload, 32000, 1);
+
+        l_computed_sig := LOWER(RAWTOHEX(
+            DBMS_CRYPTO.MAC(
+                src => UTL_I18N.STRING_TO_RAW(l_signed_payload, 'AL32UTF8'),
+                typ => DBMS_CRYPTO.HMAC_SH256,
+                key => UTL_I18N.STRING_TO_RAW(l_webhook_secret, 'AL32UTF8')
+            )
+        ));
+
+        RETURN l_computed_sig = LOWER(l_provided_sig);
+    EXCEPTION
+        WHEN OTHERS THEN
+            -- Fail closed on anything unexpected (e.g. a malformed secret) --
+            -- never let a verification-time error be mistaken for a valid
+            -- signature.
+            RETURN FALSE;
+    END verify_signature;
+
+    ----------------------------------------------------------------------------
+    -- handle_event
+    -- TASK-032/033. See pks for the full design writeup.
+    ----------------------------------------------------------------------------
+    PROCEDURE handle_event(
+        p_payload           IN  CLOB,
+        p_signature_header  IN  VARCHAR2,
+        p_status_code        OUT PLS_INTEGER,
+        p_response_body        OUT VARCHAR2
+    ) IS
+        l_event_id       stripe_event.event_id%TYPE;
+        l_event_type     stripe_event.event_type%TYPE;
+        l_order_id       orders.order_id%TYPE;
+        l_payment_status VARCHAR2(50);
+    BEGIN
+        IF p_payload IS NULL OR DBMS_LOB.GETLENGTH(p_payload) = 0 THEN
+            p_status_code   := 400;
+            p_response_body := 'Empty request body.';
+            RETURN;
+        END IF;
+
+        -- TASK-033: signature verification gate. Nothing below this point
+        -- runs, and nothing is written to the database, unless this passes.
+        IF NOT verify_signature(p_payload, p_signature_header) THEN
+            p_status_code   := 400;
+            p_response_body := 'Invalid or missing Stripe-Signature.';
+            RETURN;
+        END IF;
+
+        l_event_id   := JSON_VALUE(p_payload, '$.id');
+        l_event_type := JSON_VALUE(p_payload, '$.type');
+
+        IF l_event_id IS NULL THEN
+            p_status_code   := 400;
+            p_response_body := 'Malformed event: missing id.';
+            RETURN;
+        END IF;
+
+        -- TASK-032: idempotent event recording. A retried/duplicate Stripe
+        -- delivery (same event_id) hits STRIPE_EVENT's UNIQUE(event_id)
+        -- constraint and is answered 200 without reprocessing.
+        BEGIN
+            INSERT INTO stripe_event (event_id, event_type, order_id, payload, processed)
+            VALUES (l_event_id, l_event_type, NULL, p_payload, 'N');
+        EXCEPTION
+            WHEN DUP_VAL_ON_INDEX THEN
+                p_status_code   := 200;
+                p_response_body := 'Duplicate event, already recorded.';
+                RETURN;
+        END;
+
+        -- TASK-032: only checkout.session.completed (a paid Payment Link)
+        -- is acted on; every other event type is recorded above (for
+        -- audit) but otherwise ignored.
+        IF l_event_type != 'checkout.session.completed' THEN
+            p_status_code   := 200;
+            p_response_body := 'Event recorded; type not handled.';
+            RETURN;
+        END IF;
+
+        l_order_id       := TO_NUMBER(JSON_VALUE(p_payload, '$.data.object.metadata.order_id'));
+        l_payment_status := JSON_VALUE(p_payload, '$.data.object.payment_status');
+
+        BEGIN
+            IF l_order_id IS NULL THEN
+                RAISE_APPLICATION_ERROR(-20095,
+                    'pkg_stripe.handle_event: event ' || l_event_id
+                    || ' has no data.object.metadata.order_id.');
+            END IF;
+
+            -- Record the resolved order_id on the event row now, even if
+            -- the status-change step below fails -- STRIPE_EVENT.ORDER_ID
+            -- is populated "once the handler looks it up" per its own
+            -- column comment, independent of PROCESSED.
+            UPDATE stripe_event SET order_id = l_order_id WHERE event_id = l_event_id;
+
+            UPDATE orders SET stripe_payment_status = l_payment_status WHERE order_id = l_order_id;
+
+            pkg_order_status.change_status(
+                p_order_id    => l_order_id,
+                p_new_status  => 'Payment Received',
+                p_changed_by  => 'SYSTEM'
+            );
+
+            UPDATE stripe_event SET processed = 'Y' WHERE event_id = l_event_id;
+        EXCEPTION
+            WHEN OTHERS THEN
+                -- TASK-032: any failure resolving the order or advancing
+                -- its status is logged and swallowed here -- the event was
+                -- validly received and durably recorded above, so the
+                -- response is still 200 (STRIPE_EVENT.PROCESSED stays 'N'
+                -- for manual follow-up); a non-2xx response would just make
+                -- Stripe retry the same delivery forever for a problem
+                -- retrying can't fix.
+                log_error(
+                    p_source   => 'PKG_STRIPE.HANDLE_EVENT',
+                    p_message  => SQLERRM,
+                    p_order_id => l_order_id,
+                    p_context  => 'event_id=' || l_event_id || ' event_type=' || l_event_type
+                );
+        END;
+
+        p_status_code   := 200;
+        p_response_body := 'Event processed.';
+    EXCEPTION
+        WHEN OTHERS THEN
+            -- Defense in depth: handle_event must never raise. Anything
+            -- unanticipated (e.g. a malformed payload JSON_VALUE can't
+            -- parse) falls through to here rather than propagating to the
+            -- ORDS handler.
+            log_error(
+                p_source  => 'PKG_STRIPE.HANDLE_EVENT',
+                p_message => SQLERRM,
+                p_context => 'unexpected error in handle_event'
+            );
+            p_status_code   := 400;
+            p_response_body := 'Malformed request.';
+    END handle_event;
 
 END pkg_stripe;
 /
