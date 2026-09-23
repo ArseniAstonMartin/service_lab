@@ -19,10 +19,16 @@ Service.md`. Task breakdown and status: `tasks.json`. Session log:
 
 ## Applications
 
-| App  | ID  | Purpose                                    | Auth                  |
-|------|-----|---------------------------------------------|------------------------|
-| f100 | 100 | Public app — wizard, confirmation, tracking | No Authentication       |
-| f200 | 200 | Admin app — orders, review queue, pricing   | Oracle APEX Accounts    |
+| App    | ID    | Purpose                                      | Auth                  |
+|--------|-------|-----------------------------------------------|------------------------|
+| f92606 | 92606 | Public app — wizard, confirmation, tracking    | No Authentication      |
+| f94517 | 94517 | Admin app — orders, review queue, pricing      | Oracle APEX Accounts  |
+
+App IDs 100/200 were this project's original naming convention (the
+"f100"/"f200" shorthand still shows up in some task-tracking notes), but
+those specific IDs were already taken by other apps in this shared
+apex.oracle.com workspace (WKSP_HAWAIIAUTOMOTIVE) -- App Builder assigned
+92606 and 94517 instead when the apps were created (TASK-009).
 
 ## Repository layout
 
@@ -35,8 +41,8 @@ database/
   tests/      Standalone .sql test scripts (constraint/negative tests, package unit tests)
   install.sql Master script: ddl -> packages -> seed -> ords
 apex/
-  f100.sql    Export of the public app
-  f200.sql    Export of the admin app
+  f92606.sql  Export of the public app
+  f94517.sql  Export of the admin app
 ```
 
 ## Environment setup checklist (TASK-001)
@@ -100,19 +106,19 @@ default for all workspaces.
      target's contents via SQLcl `@database/install.sql` from that
      directory so relative paths resolve).
    - Review the script output for errors before continuing.
-6. **Importing the apps** — after `apex/f100.sql` and `apex/f200.sql` exist
+6. **Importing the apps** — after `apex/f92606.sql` and `apex/f94517.sql` exist
    (TASK-009), import each via App Builder → Import, or SQLcl:
    ```
-   apex import apex/f100.sql
-   apex import apex/f200.sql
+   apex import apex/f92606.sql
+   apex import apex/f94517.sql
    ```
-7. **Exporting an app after a change** — anytime an app (f100/f200) is
+7. **Exporting an app after a change** — anytime an app (f92606/f94517) is
    changed in App Builder, re-export and commit it:
    ```
-   apex export -applicationid 100 -dir apex
-   apex export -applicationid 200 -dir apex
+   apex export -applicationid 92606 -dir apex
+   apex export -applicationid 94517 -dir apex
    ```
-   Never hand-edit `apex/f100.sql` or `apex/f200.sql` directly.
+   Never hand-edit `apex/f92606.sql` or `apex/f94517.sql` directly.
 
 ## From-scratch install
 
@@ -120,8 +126,8 @@ default for all workspaces.
 2. Complete the checklist above (TASK-001).
 3. Run `database/install.sql` (see step 5 above) once the DDL/package/seed
    scripts referenced by it exist.
-4. Import `apex/f100.sql` and `apex/f200.sql` (see step 6 above).
-5. Create an admin user for f200 under Administration → Manage Users (no
+4. Import `apex/f92606.sql` and `apex/f94517.sql` (see step 6 above).
+5. Create an admin user for f94517 under Administration → Manage Users (no
    public self sign-up — see TASK-034).
 
 ## Always Free considerations (TASK-050)
