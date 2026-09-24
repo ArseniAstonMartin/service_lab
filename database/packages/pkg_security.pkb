@@ -6,11 +6,25 @@
 CREATE OR REPLACE PACKAGE BODY pkg_security AS
 
     c_max_file_size_bytes  CONSTANT NUMBER      := 10 * 1024 * 1024; -- 10 MB (TASK-011 acceptance criteria)
-    c_token_bytes           CONSTANT PLS_INTEGER := 32;               -- DBMS_CRYPTO.RANDOMBYTES(32) (TASK-011 acceptance criteria)
+    c_token_bytes           CONSTANT PLS_INTEGER := 32;               -- SHA-256 digest width (TASK-011 acceptance criteria)
     c_max_token_attempts     CONSTANT PLS_INTEGER := 10;               -- retries on a UNIQUE collision, then gives up loudly
 
     -- --------------------------------------------------------------------------
     -- generate_tracking_token
+    --
+    -- DEVIATION from the original design (live-verified 2026-09-24): this
+    -- workspace's schema has no EXECUTE privilege on DBMS_CRYPTO (a shared
+    -- apex.oracle.com Free Evaluation Workspace restriction -- confirmed by
+    -- a live PLS-00201 "identifier 'DBMS_CRYPTO' must be declared" compile
+    -- error, not something this schema can GRANT itself). DBMS_CRYPTO.
+    -- RANDOMBYTES is therefore replaced with STANDARD_HASH('...', 'SHA256')
+    -- -- a native SQL function needing no package privilege at all -- fed
+    -- with SYS_GUID() (server-generated, effectively unguessable) plus
+    -- DBMS_RANDOM (confirmed available: already used elsewhere in this
+    -- schema, e.g. pkg_import.start_batch's batch id) and a high-precision
+    -- timestamp for additional entropy. The SHA-256 digest is 32 bytes,
+    -- matching c_token_bytes exactly, so the rest of this function (unique-
+    -- ness retry loop, base64 encoding) is unchanged.
     -- --------------------------------------------------------------------------
     FUNCTION generate_tracking_token RETURN VARCHAR2 IS
         l_raw      RAW(32);
@@ -18,7 +32,18 @@ CREATE OR REPLACE PACKAGE BODY pkg_security AS
         l_exists   PLS_INTEGER;
     BEGIN
         FOR i IN 1 .. c_max_token_attempts LOOP
-            l_raw := DBMS_CRYPTO.RANDOMBYTES(c_token_bytes);
+            l_raw := STANDARD_HASH(
+                UTL_RAW.CONCAT(
+                    SYS_GUID(),
+                    SYS_GUID(),
+                    UTL_RAW.CAST_TO_RAW(
+                        DBMS_RANDOM.STRING('X', 64)
+                        || TO_CHAR(SYSTIMESTAMP, 'YYYYMMDDHH24MISSFF9')
+                        || TO_CHAR(i)
+                    )
+                ),
+                'SHA256'
+            );
 
             -- Standard base64 -> URL-safe base64, no padding:
             --   UTL_ENCODE.BASE64_ENCODE inserts a CRLF every 64 output

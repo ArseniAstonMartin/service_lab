@@ -307,10 +307,20 @@ CREATE OR REPLACE PACKAGE BODY pkg_import AS
                     -- between validation and this call. Roll back just
                     -- this row's writes, record why, and move on to the
                     -- next row rather than aborting the whole batch.
-                    ROLLBACK TO SAVEPOINT sp_import_row;
-                    UPDATE compat_import_stg
-                       SET status = 'INVALID', error_text = SUBSTR(SQLERRM, 1, 4000)
-                     WHERE stg_id = rec.stg_id;
+                    -- SQLERRM cannot be referenced directly inside a SQL
+                    -- statement (live-confirmed 2026-09-24: ORA-00904,
+                    -- invalid identifier "SQLERRM") -- it is a PL/SQL-only
+                    -- function, so it must be captured into a local
+                    -- variable first, same as every other error-logging
+                    -- site in this schema (e.g. pkg_stripe.log_error).
+                    DECLARE
+                        l_err_text VARCHAR2(4000) := SUBSTR(SQLERRM, 1, 4000);
+                    BEGIN
+                        ROLLBACK TO SAVEPOINT sp_import_row;
+                        UPDATE compat_import_stg
+                           SET status = 'INVALID', error_text = l_err_text
+                         WHERE stg_id = rec.stg_id;
+                    END;
                     p_skipped_count := p_skipped_count + 1;
             END;
         END LOOP;

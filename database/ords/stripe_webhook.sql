@@ -37,6 +37,21 @@
 -- every other package in this schema uses and does not COMMIT internally.
 -- ============================================================================
 BEGIN
+    -- Self-enable REST for this schema (live-confirmed 2026-09-24:
+    -- ORA-20012 "Schema not REST enabled" on the first run). On an
+    -- Autonomous Database / apex.oracle.com workspace, a schema owner can
+    -- enable ORDS for its own schema without any ADMIN grant -- this call
+    -- is idempotent (safe to run again on every re-install) and uses the
+    -- schema's own name as both the REST-enabled flag owner and its base
+    -- path alias, matching the module's p_base_path ('stripe/') below.
+    ORDS.ENABLE_SCHEMA(
+        p_enabled          => TRUE,
+        p_schema           => SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA'),
+        p_url_mapping_type => 'BASE_PATH',
+        p_url_mapping_pattern => LOWER(SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA')),
+        p_auto_rest_auth   => FALSE
+    );
+
     ORDS.DEFINE_MODULE(
         p_module_name    => 'stripe.webhook',
         p_base_path      => 'stripe/',

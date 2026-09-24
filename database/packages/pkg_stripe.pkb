@@ -157,12 +157,19 @@ CREATE OR REPLACE PACKAGE BODY pkg_stripe AS
             || '&line_items[1][quantity]=1'
             || '&metadata[order_id]=' || TO_CHAR(p_order_id);
 
+        -- APEX_WEB_SERVICE.MAKE_REST_REQUEST has no p_content_type parameter
+        -- (live-confirmed 2026-09-24: PLS-00306, wrong number/types of
+        -- arguments) -- the documented way to set a request header is via
+        -- the APEX_WEB_SERVICE.g_request_headers array before the call.
+        APEX_WEB_SERVICE.g_request_headers.DELETE;
+        APEX_WEB_SERVICE.g_request_headers(1).name  := 'Content-Type';
+        APEX_WEB_SERVICE.g_request_headers(1).value := 'application/x-www-form-urlencoded';
+
         l_response := APEX_WEB_SERVICE.MAKE_REST_REQUEST(
             p_url                  => c_api_base || '/payment_links',
             p_http_method          => 'POST',
             p_credential_static_id => c_credential_static_id,
-            p_body                 => l_body,
-            p_content_type         => 'application/x-www-form-urlencoded'
+            p_body                 => l_body
         );
         l_status_code := APEX_WEB_SERVICE.g_status_code;
 
@@ -241,6 +248,51 @@ CREATE OR REPLACE PACKAGE BODY pkg_stripe AS
     END get_app_setting;
 
     ----------------------------------------------------------------------------
+    -- hmac_sha256 (private)
+    -- Hand-built HMAC-SHA256 (RFC 2104) using only STANDARD_HASH and
+    -- UTL_RAW -- neither privilege-gated in this workspace, unlike
+    -- DBMS_CRYPTO (see verify_signature's header comment for why this
+    -- exists at all). Block size for SHA-256 is 64 bytes:
+    --   K' = K, hashed down to 32 bytes if longer than 64, then
+    --        zero-padded on the right to exactly 64 bytes if shorter
+    --   ipad = K' XOR (0x36 repeated 64 times)
+    --   opad = K' XOR (0x5c repeated 64 times)
+    --   HMAC(K, m) = SHA256( opad || SHA256( ipad || m ) )
+    ----------------------------------------------------------------------------
+    FUNCTION hmac_sha256(p_key IN RAW, p_msg IN RAW) RETURN RAW IS
+        c_block_size CONSTANT PLS_INTEGER := 64; -- SHA-256 HMAC block size, in bytes
+        l_key        RAW(64);
+        l_ipad_mask  RAW(64);
+        l_opad_mask  RAW(64);
+        l_ipad       RAW(64);
+        l_opad       RAW(64);
+        l_inner      RAW(32);
+    BEGIN
+        l_key := p_key;
+
+        IF UTL_RAW.LENGTH(l_key) > c_block_size THEN
+            l_key := STANDARD_HASH(l_key, 'SHA256'); -- down to 32 bytes
+        END IF;
+
+        IF UTL_RAW.LENGTH(l_key) < c_block_size THEN
+            l_key := UTL_RAW.CONCAT(
+                l_key,
+                UTL_RAW.COPIES(HEXTORAW('00'), c_block_size - UTL_RAW.LENGTH(l_key))
+            );
+        END IF;
+
+        l_ipad_mask := UTL_RAW.COPIES(HEXTORAW('36'), c_block_size);
+        l_opad_mask := UTL_RAW.COPIES(HEXTORAW('5C'), c_block_size);
+
+        l_ipad := UTL_RAW.BIT_XOR(l_key, l_ipad_mask);
+        l_opad := UTL_RAW.BIT_XOR(l_key, l_opad_mask);
+
+        l_inner := STANDARD_HASH(UTL_RAW.CONCAT(l_ipad, p_msg), 'SHA256');
+
+        RETURN STANDARD_HASH(UTL_RAW.CONCAT(l_opad, l_inner), 'SHA256');
+    END hmac_sha256;
+
+    ----------------------------------------------------------------------------
     -- verify_signature
     -- TASK-033. Verifies a Stripe-Signature header (format
     -- "t=<unix ts>,v1=<hex hmac>[,v0=...]") against p_payload, using
@@ -310,13 +362,21 @@ CREATE OR REPLACE PACKAGE BODY pkg_stripe AS
 
         l_signed_payload := l_timestamp_str || '.' || DBMS_LOB.SUBSTR(p_payload, 32000, 1);
 
-        l_computed_sig := LOWER(RAWTOHEX(
-            DBMS_CRYPTO.MAC(
-                src => UTL_I18N.STRING_TO_RAW(l_signed_payload, 'AL32UTF8'),
-                typ => DBMS_CRYPTO.HMAC_SH256,
-                key => UTL_I18N.STRING_TO_RAW(l_webhook_secret, 'AL32UTF8')
-            )
-        ));
+        -- DEVIATION from the original design (live-verified 2026-09-24):
+        -- this workspace's schema has no EXECUTE privilege on DBMS_CRYPTO
+        -- (see pkg_security.pkb's generate_tracking_token header comment
+        -- for the same live-confirmed restriction), so DBMS_CRYPTO.MAC is
+        -- replaced with a hand-built HMAC-SHA256 using only STANDARD_HASH
+        -- (a native SQL function, SHA-256 digest = 32 bytes = the RFC 2104
+        -- HMAC block size for this hash) and UTL_RAW (bitwise XOR/concat,
+        -- not privilege-gated) -- the standard construction:
+        --   HMAC(K, m) = H( (K' XOR opad) || H( (K' XOR ipad) || m ) )
+        -- with K' = K, right-padded with zero bytes to the 64-byte SHA-256
+        -- block size (or hashed down to 32 bytes first if longer than 64).
+        l_computed_sig := LOWER(RAWTOHEX(hmac_sha256(
+            p_key => UTL_I18N.STRING_TO_RAW(l_webhook_secret, 'AL32UTF8'),
+            p_msg => UTL_I18N.STRING_TO_RAW(l_signed_payload, 'AL32UTF8')
+        )));
 
         RETURN l_computed_sig = LOWER(l_provided_sig);
     EXCEPTION

@@ -22,9 +22,9 @@
 --        ORDER_SUBMITTED, PAYMENT_LINK, MODULE_RECEIVED, SHIPPED_BACK,
 --        ADMIN_NEW_ORDER
 --      pkg_notify.send passes p_email_type straight through as
---      APEX_WEB_SERVICE... no -- as APEX_MAIL.SEND_TEMPLATED_EMAIL's
---      p_static_id, so the Static ID must match one of those five strings
---      exactly (case-sensitive). This is App Builder-only work (per this
+--      APEX_MAIL.SEND's p_template_static_id, so the Static ID must match
+--      one of those five strings exactly (case-sensitive). This is App
+--      Builder-only work (per this
 --      project's "never hand-edit apex/f*.sql" rule) and needs a live
 --      session -- see TASK-028/029/031 for what each template's own subject/
 --      body and #PLACEHOLDER# markup should say.
@@ -55,7 +55,7 @@ CREATE OR REPLACE PACKAGE pkg_notify AUTHID DEFINER AS
     -- ------------------------------------------------------------------------
     -- send
     -- Sends one of the 5 transactional emails for p_order_id via
-    -- APEX_MAIL.SEND_TEMPLATED_EMAIL against the Email Template whose
+    -- APEX_MAIL.SEND (its template overload, APEX 23.1+) against the Email Template whose
     -- Static ID equals p_email_type, and writes exactly one EMAIL_LOG row
     -- (SUCCESS or FAILED) regardless of outcome.
     --

@@ -20,7 +20,7 @@
 CREATE TABLE app_setting (
     setting_key     VARCHAR2(50)    NOT NULL,
     setting_value   VARCHAR2(4000)  NOT NULL,
-    description     VARCHAR2(200),
+    description     VARCHAR2(500),
     updated_at      TIMESTAMP       DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT pk_app_setting PRIMARY KEY (setting_key)
 );

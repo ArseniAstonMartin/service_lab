@@ -17,7 +17,7 @@ CREATE OR REPLACE PACKAGE pkg_compat AUTHID DEFINER AS
     TYPE t_service_row IS RECORD (
         service_id   service.service_id%TYPE,
         name         service.name%TYPE,
-        price_tier   service.price_tier%TYPE,
+        tier_code    service.price_tier%TYPE,
         tier_amount  price_tier.amount%TYPE
     );
     TYPE t_service_tab IS TABLE OF t_service_row;

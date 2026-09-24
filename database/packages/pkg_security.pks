@@ -15,7 +15,7 @@ CREATE OR REPLACE PACKAGE pkg_security AUTHID DEFINER AS
     -- ------------------------------------------------------------------------
     -- generate_tracking_token
     -- Returns a cryptographically random, URL-safe, non-sequential token
-    -- (DBMS_CRYPTO.RANDOMBYTES(32) -> base64 -> URL-safe alphabet, no
+    -- (STANDARD_HASH-based 32-byte digest -> base64 -> URL-safe alphabet, no
     -- padding) guaranteed unique against ORDERS.TRACKING_TOKEN at the moment
     -- it is generated (retries on a collision, which -- at 32 random bytes
     -- -- is astronomically unlikely but checked anyway per the acceptance

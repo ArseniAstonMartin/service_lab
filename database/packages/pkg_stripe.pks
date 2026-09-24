@@ -125,7 +125,7 @@ CREATE OR REPLACE PACKAGE pkg_stripe AUTHID DEFINER AS
     --   1. p_signature_header must be present and parse into a t= (unix
     --      timestamp) and at least one v1= (hex HMAC-SHA256 signature)
     --      field.
-    --   2. Its HMAC-SHA256 (DBMS_CRYPTO.MAC, key = APP_SETTING.
+    --   2. Its HMAC-SHA256 (hand-built via STANDARD_HASH/UTL_RAW, key = APP_SETTING.
     --      STRIPE_WEBHOOK_SECRET) over "<t>.<raw body>" must match the v1=
     --      value.
     --   3. t= must be within c_timestamp_tolerance_seconds (see pkb) of the

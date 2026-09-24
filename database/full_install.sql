@@ -10,7 +10,12 @@
 --
 -- Order: DDL (reference tables) -> DDL (order tables) -> DDL (config/logs)
 --        -> constraints -> triggers -> views -> import staging
---        -> packages -> seed data -> ORDS modules
+--        -> package specs (all) -> package bodies (all) -> seed data
+--        -> ORDS modules
+--
+-- Package specs are compiled before ANY body (not spec+body per package)
+-- because bodies call across packages in a cycle-ish way -- see the
+-- comment in install.sql above the specs block for why.
 --
 -- Stops immediately on the first error so partial installs are never left
 -- silently broken.
@@ -392,7 +397,7 @@ PROMPT ==========================================================
 CREATE TABLE app_setting (
     setting_key     VARCHAR2(50)    NOT NULL,
     setting_value   VARCHAR2(4000)  NOT NULL,
-    description     VARCHAR2(200),
+    description     VARCHAR2(500),
     updated_at      TIMESTAMP       DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT pk_app_setting PRIMARY KEY (setting_key)
 );
@@ -631,7 +636,7 @@ ALTER TABLE orders
             OR total_amount = service_price + return_shipping_fee
         );
 
-COMMENT ON CONSTRAINT ck_orders_total_matches_sum ON orders IS 'Only enforced once all three of SERVICE_PRICE/RETURN_SHIPPING_FEE/TOTAL_AMOUNT are set (matched path or a confirmed Pending Review order, both via pkg_pricing/TASK-014) -- a Pending-Review order legitimately has all three NULL before compatibility is confirmed.';
+-- NOTE (Oracle has no COMMENT ON CONSTRAINT): ck_orders_total_matches_sum ON orders IS 'Only enforced once all three of SERVICE_PRICE/RETURN_SHIPPING_FEE/TOTAL_AMOUNT are set (matched path or a confirmed Pending Review order, both via pkg_pricing/TASK-014) -- a Pending-Review order legitimately has all three NULL before compatibility is confirmed.';
 
 -- ----------------------------------------------------------------------------
 -- Format CHECK constraints on ORDERS (acceptance criteria: email + US ZIP)
@@ -644,8 +649,8 @@ ALTER TABLE orders
     ADD CONSTRAINT ck_orders_zip_format
         CHECK (REGEXP_LIKE(return_address_zip, '^[0-9]{5}(-[0-9]{4})?$'));
 
-COMMENT ON CONSTRAINT ck_orders_email_format ON orders IS 'Basic non-strict email shape check (local@domain.tld); mirrored by an APEX page-level validation on f92606 Page 14 (TASK-021) for a friendlier inline message before this constraint would ever fire.';
-COMMENT ON CONSTRAINT ck_orders_zip_format ON orders IS 'US ZIP or ZIP+4 (5 digits, optional -4 digits); mirrored by an APEX page-level validation on f92606 Page 14 (TASK-021).';
+-- NOTE (Oracle has no COMMENT ON CONSTRAINT): ck_orders_email_format ON orders IS 'Basic non-strict email shape check (local@domain.tld); mirrored by an APEX page-level validation on f92606 Page 14 (TASK-021) for a friendlier inline message before this constraint would ever fire.';
+-- NOTE (Oracle has no COMMENT ON CONSTRAINT): ck_orders_zip_format ON orders IS 'US ZIP or ZIP+4 (5 digits, optional -4 digits); mirrored by an APEX page-level validation on f92606 Page 14 (TASK-021).';
 
 
 PROMPT ==========================================================
@@ -1004,7 +1009,7 @@ CREATE OR REPLACE PACKAGE pkg_security AUTHID DEFINER AS
     -- ------------------------------------------------------------------------
     -- generate_tracking_token
     -- Returns a cryptographically random, URL-safe, non-sequential token
-    -- (DBMS_CRYPTO.RANDOMBYTES(32) -> base64 -> URL-safe alphabet, no
+    -- (STANDARD_HASH-based 32-byte digest -> base64 -> URL-safe alphabet, no
     -- padding) guaranteed unique against ORDERS.TRACKING_TOKEN at the moment
     -- it is generated (retries on a collision, which -- at 32 random bytes
     -- -- is astronomically unlikely but checked anyway per the acceptance
@@ -1067,6 +1072,988 @@ END pkg_security;
 
 
 PROMPT ==========================================================
+PROMPT --- Package spec: pkg_order_status (packages/pkg_order_status.pks) ---
+PROMPT ==========================================================
+
+-- ============================================================================
+-- pkg_order_status.pks
+-- TASK-012: order status state machine, history and a notification hook.
+-- TASK-029: filled in on_status_changed (see pkg_order_status.pkb) to send
+-- email #3 (MODULE_RECEIVED) on the transition to Block Received and email
+-- #4 (SHIPPED_BACK) on the transition to Ready / Shipped Back. No public
+-- signature changed by this task.
+-- TASK-031: filled in on_status_changed's last remaining branch -- on the
+-- transition to Awaiting Payment, creates the Stripe Payment Link
+-- (pkg_stripe.create_payment_link) and sends email #2 (PAYMENT_LINK). No
+-- public signature changed by this task either.
+--
+-- The single place that is allowed to change ORDERS.STATUS -- enforced by
+-- TRG_ORDERS_STATUS_GUARD (050_triggers.sql, TASK-006), which rejects any
+-- UPDATE of ORDERS.STATUS not bracketed by PKG_ORDER_STATUS_CTX.allow_change
+-- / done_changing, both of which only this package's change_status calls.
+-- ============================================================================
+CREATE OR REPLACE PACKAGE pkg_order_status AUTHID DEFINER AS
+
+    -- Row/collection types for get_next_statuses, declared here (not in the
+    -- body) so SQL can consume the pipelined function via
+    -- TABLE(pkg_order_status.get_next_statuses(:P_ORDER_ID)) -- the pattern
+    -- TASK-037's f94517 admin select list will use as its LOV source.
+    TYPE t_next_status_row IS RECORD (
+        status_code  order_status_ref.status_code%TYPE,
+        display_seq  order_status_ref.display_seq%TYPE
+    );
+    TYPE t_next_status_tab IS TABLE OF t_next_status_row;
+
+    -- ------------------------------------------------------------------------
+    -- get_next_statuses
+    -- Pipelined: pipes zero or one row -- the single status this linear state
+    -- machine allows next for p_order_id's current status, or zero rows if
+    -- the order is in a terminal status (Completed) or doesn't exist. Zero-
+    -- or-one rather than "many" reflects the PRD's linear lifecycle (no
+    -- branching next steps in v1); still shaped as a table function so a
+    -- future non-linear transition (e.g. TASK-049's Block Received ->
+    -- Pending Review) can pipe more than one row without an interface
+    -- change.
+    -- ------------------------------------------------------------------------
+    FUNCTION get_next_statuses(p_order_id IN NUMBER) RETURN t_next_status_tab PIPELINED;
+
+    -- ------------------------------------------------------------------------
+    -- change_status
+    -- Validates p_new_status is the (only) allowed next status for the
+    -- order's current status, applies it (authorized via
+    -- PKG_ORDER_STATUS_CTX so TRG_ORDERS_STATUS_GUARD allows the UPDATE),
+    -- writes an ORDER_STATUS_HISTORY row, then calls the on_status_changed
+    -- hook (TASK-029/031: sends emails #2/#3/#4 for the three statuses that
+    -- need one, and creates the Stripe Payment Link for Awaiting Payment;
+    -- a no-op for every other status). Raises a readable error -- and
+    -- leaves ORDERS.STATUS unchanged -- on an invalid transition or an
+    -- unknown order id.
+    --
+    -- TASK-031: a change_status call that moves an order TO Awaiting
+    -- Payment therefore also creates that order's Stripe Payment Link as
+    -- part of the same call (via the hook) -- there is no separate step
+    -- the caller needs to take. A notification/Stripe failure in the hook
+    -- is logged (APP_ERROR_LOG) and swallowed, never raised back to this
+    -- procedure's caller -- see pkg_order_status.pkb's on_status_changed
+    -- comment for why.
+    --
+    -- p_changed_by: explicit actor (e.g. 'SYSTEM' from the Stripe webhook,
+    -- TASK-032). NULL (the default) resolves to the live APEX session's
+    -- APP_USER, falling back to 'SYSTEM' outside an APEX session (TASK-012
+    -- acceptance criteria).
+    -- p_comment: accepted now, unused until TASK-049 (Block Received ->
+    -- Pending Review requires one) -- keeping the parameter here means that
+    -- future task doesn't need to change this procedure's signature.
+    -- ------------------------------------------------------------------------
+    PROCEDURE change_status(
+        p_order_id    IN NUMBER,
+        p_new_status  IN VARCHAR2,
+        p_changed_by  IN VARCHAR2 DEFAULT NULL,
+        p_comment     IN VARCHAR2 DEFAULT NULL
+    );
+
+END pkg_order_status;
+/
+
+
+PROMPT ==========================================================
+PROMPT --- Package spec: pkg_compat (packages/pkg_compat.pks) ---
+PROMPT ==========================================================
+
+-- ============================================================================
+-- pkg_compat.pks
+-- TASK-013: exact-match Part Number lookup and the confirmed-services list
+-- for a matched compatibility entry.
+--
+-- This package is the ONLY place "is this Part Number supported?" is
+-- decided (PRD 4.2: "the system never silently guesses"). find_match never
+-- does a LIKE/fuzzy match -- an exact match on (vehicle_id, category_id,
+-- normalized part_number) or nothing.
+-- ============================================================================
+CREATE OR REPLACE PACKAGE pkg_compat AUTHID DEFINER AS
+
+    -- Row/collection types for get_services, declared here (not in the
+    -- body) so SQL can consume the pipelined function via
+    -- TABLE(pkg_compat.get_services(:AI_MATCHED_ENTRY_ID)) -- the pattern
+    -- TASK-019's f92606 service-selection Cards region will use as its source.
+    TYPE t_service_row IS RECORD (
+        service_id   service.service_id%TYPE,
+        name         service.name%TYPE,
+        tier_code    service.price_tier%TYPE,
+        tier_amount  price_tier.amount%TYPE
+    );
+    TYPE t_service_tab IS TABLE OF t_service_row;
+
+    -- ------------------------------------------------------------------------
+    -- find_match
+    -- Returns the matching COMPATIBILITY_ENTRY.ENTRY_ID for
+    -- (p_vehicle_id, p_category_id, p_part_number), or NULL if there is no
+    -- match.
+    --
+    -- Normalization: p_part_number is compared as UPPER(TRIM(p_part_number))
+    -- -- nothing more (no punctuation stripping, no fuzzy matching) --
+    -- against COMPATIBILITY_ENTRY.PART_NUMBER, which TRG_COMPAT_ENTRY_BIU
+    -- (TASK-006) already stores as UPPER(TRIM()), so this is a plain exact
+    -- string match on both sides, never a LIKE.
+    --
+    -- "No match" covers two distinct cases, both returning NULL:
+    --   1. No COMPATIBILITY_ENTRY row exists for this
+    --      (vehicle_id, category_id, part_number) triple at all.
+    --   2. A COMPATIBILITY_ENTRY row exists, but has zero linked
+    --      COMPATIBILITY_SERVICE rows (TASK-013 acceptance criteria: "An
+    --      entry with zero linked services counts as no match").
+    -- ------------------------------------------------------------------------
+    FUNCTION find_match(
+        p_vehicle_id   IN NUMBER,
+        p_category_id  IN NUMBER,
+        p_part_number  IN VARCHAR2
+    ) RETURN NUMBER;
+
+    -- ------------------------------------------------------------------------
+    -- get_services
+    -- Pipelined: the SERVICE rows confirmed supported for p_entry_id (i.e.
+    -- linked via COMPATIBILITY_SERVICE), each with its current tier price
+    -- already joined in. Ordered by SERVICE.NAME for a stable display order.
+    -- Zero rows for an entry with no linked services, or an unknown
+    -- p_entry_id -- never raises for either case, since a page/report
+    -- source should not itself blow up on empty data.
+    -- ------------------------------------------------------------------------
+    FUNCTION get_services(p_entry_id IN NUMBER) RETURN t_service_tab PIPELINED;
+
+END pkg_compat;
+/
+
+
+PROMPT ==========================================================
+PROMPT --- Package spec: pkg_pricing (packages/pkg_pricing.pks) ---
+PROMPT ==========================================================
+
+-- ============================================================================
+-- pkg_pricing.pks
+-- TASK-014: server-side calculation of service price, return shipping fee
+-- and order total, and the only place that snapshots those amounts into
+-- ORDERS.
+--
+-- PRD 5.4 acceptance criteria: "no page ever takes a price from a page
+-- item" -- every price a customer or admin sees is computed here, from
+-- PRICE_TIER/APP_SETTING, never trusted from client-submitted input.
+-- ============================================================================
+CREATE OR REPLACE PACKAGE pkg_pricing AUTHID DEFINER AS
+
+    -- ------------------------------------------------------------------------
+    -- get_service_price
+    -- The current price for p_service_id, read through
+    -- SERVICE.PRICE_TIER -> PRICE_TIER.AMOUNT (never a live join is cached
+    -- or trusted from a page item -- callers always call this function).
+    -- Raises -20070 if p_service_id does not exist.
+    -- ------------------------------------------------------------------------
+    FUNCTION get_service_price(p_service_id IN NUMBER) RETURN NUMBER;
+
+    -- ------------------------------------------------------------------------
+    -- get_return_fee
+    -- The current flat return-shipping fee, read from
+    -- APP_SETTING('RETURN_SHIPPING_FEE') (PRD 4.5/5.4: admin-editable,
+    -- $20-30 range -- range is an admin convention, not enforced here).
+    -- Raises -20071 if the setting row is missing or not a valid number.
+    -- ------------------------------------------------------------------------
+    FUNCTION get_return_fee RETURN NUMBER;
+
+    -- ------------------------------------------------------------------------
+    -- calc_total
+    -- get_service_price(p_service_id) + get_return_fee. Convenience for
+    -- anywhere that needs the total without snapshotting it (e.g. an APEX
+    -- page displaying "Estimated total" before submission).
+    -- ------------------------------------------------------------------------
+    FUNCTION calc_total(p_service_id IN NUMBER) RETURN NUMBER;
+
+    -- ------------------------------------------------------------------------
+    -- price_order
+    -- Computes get_service_price(p_service_id) and get_return_fee, and
+    -- snapshots ORDERS.SERVICE_PRICE / RETURN_SHIPPING_FEE / TOTAL_AMOUNT
+    -- for p_order_id in one UPDATE. This is the ONLY procedure in the
+    -- schema that is allowed to write those three columns (PRD 5.4
+    -- acceptance criteria: "prices are snapshotted into ORDERS only
+    -- through this package") -- pkg_order.submit_order (TASK-015) and
+    -- pkg_review.confirm_compatibility (TASK-040) call this rather than
+    -- ever UPDATE-ing those columns themselves.
+    --
+    -- Snapshotted values are frozen at call time (PRD 5.4: a later edit to
+    -- PRICE_TIER.AMOUNT or APP_SETTING must never retroactively change an
+    -- already-priced order) -- calling this again re-prices the order at
+    -- today's rates, which is intentional only for the admin-driven
+    -- re-price case (TASK-040); ordinary flows call it exactly once.
+    --
+    -- Raises -20070/-20071 (see above) if the price inputs can't be
+    -- resolved, or -20072 if p_order_id does not exist.
+    -- ------------------------------------------------------------------------
+    PROCEDURE price_order(
+        p_order_id   IN NUMBER,
+        p_service_id IN NUMBER
+    );
+
+END pkg_pricing;
+/
+
+
+PROMPT ==========================================================
+PROMPT --- Package spec: pkg_order (packages/pkg_order.pks) ---
+PROMPT ==========================================================
+
+-- ============================================================================
+-- pkg_order.pks
+-- TASK-015: atomic order creation for both submission paths.
+-- TASK-028: added the exactly-once ORDER_SUBMITTED/ADMIN_NEW_ORDER
+-- notification dispatch (see submit_order's own comment below and
+-- pkg_order.pkb's header for the commit-timing trade-off this involved).
+--
+-- The single entry point the wizard's final "submit" step (f92606 Page 15,
+-- TASK-022) calls. Everything a submission produces -- the ORDERS row, its
+-- photos, its dynamic-question answers and its first ORDER_STATUS_HISTORY
+-- row -- is written here, in one PL/SQL call, so a caller that does not
+-- commit until submit_order returns gets all-or-nothing behavior for free
+-- (see pkg_order.pkb's header comment for how that atomicity is actually
+-- achieved).
+--
+-- submit_order never trusts the client on the one question that matters
+-- most -- "is this Part Number supported" -- it always re-runs
+-- pkg_compat.find_match itself (PRD 4.2: "the system never silently
+-- guesses"), even though the wizard already showed the customer a match/
+-- no-match result on an earlier page.
+-- ============================================================================
+CREATE OR REPLACE PACKAGE pkg_order AUTHID DEFINER AS
+
+    -- ------------------------------------------------------------------------
+    -- Dynamic-question answers to save. Associative array (not a SQL-level
+    -- collection type) because the only caller is PL/SQL -- an APEX page
+    -- process building it from APEX_APPLICATION.g_f01/g_f02-style page
+    -- items or from a collection -- never a SQL query.
+    -- ------------------------------------------------------------------------
+    -- Populate densely from index 1 (p_answers(p_answers.COUNT + 1) := ...)
+    -- -- submit_order iterates 1 .. p_answers.COUNT, a sparse array would
+    -- silently skip rows.
+    TYPE t_answer_input_row IS RECORD (
+        question_code  order_answer.question_code%TYPE,
+        answer_value   order_answer.answer_value%TYPE
+    );
+    TYPE t_answer_input_tab IS TABLE OF t_answer_input_row INDEX BY PLS_INTEGER;
+
+    -- ------------------------------------------------------------------------
+    -- Photos to store. p_temp_file_name is a name from
+    -- APEX_APPLICATION_TEMP_FILES (the wizard's File Upload items,
+    -- TASK-017); p_photo_type is STICKER/DONOR/ORIGINAL
+    -- (ck_order_photo_type, TASK-006).
+    -- ------------------------------------------------------------------------
+    -- Same dense-from-1 convention as t_answer_input_tab above.
+    TYPE t_photo_input_row IS RECORD (
+        photo_type      order_photo.photo_type%TYPE,
+        temp_file_name  VARCHAR2(400)
+    );
+    TYPE t_photo_input_tab IS TABLE OF t_photo_input_row INDEX BY PLS_INTEGER;
+
+    -- ------------------------------------------------------------------------
+    -- submit_order
+    --
+    -- p_service_id: the service the customer selected. Only meaningful, and
+    -- only honored, on the matched path (see below) -- ignored (stored as
+    -- NULL) when the server's own compatibility check finds no match,
+    -- regardless of what the caller passes.
+    --
+    -- p_answers / p_photos: see the two collection types above. Either may
+    -- be empty (an associative array with COUNT = 0) -- see the body's
+    -- header comment for which case that's expected in.
+    --
+    -- p_idempotency_key: generated client-side when the review/submit page
+    -- loads (TASK-022). A second call with a key already on an ORDERS row
+    -- returns that existing order's ORDER_ID/TRACKING_TOKEN unchanged and
+    -- does no further work of its own -- no duplicate order, photos,
+    -- answers or history row. It still (harmlessly) re-runs the TASK-028
+    -- notification dispatch below, since that dispatch is itself
+    -- exactly-once (via pkg_notify.send_once) regardless of how many times
+    -- submit_order is called for the same order -- see the TASK-028 note.
+    --
+    -- Server-side flow, decided entirely inside this procedure (PRD 4.2 --
+    -- never trust the client's match/no-match flag):
+    --   1. pkg_compat.find_match(p_vehicle_id, p_category_id, p_part_number)
+    --      decides the path.
+    --   2. Matched (a compatibility entry with confirmed services exists):
+    --      p_service_id is required and must be one of that entry's
+    --      confirmed services (pkg_compat.get_services) -- raises -20080/
+    --      -20081 otherwise. ORDERS is created with SERVICE_ID/
+    --      MATCHED_ENTRY_ID set, then pkg_pricing.price_order snapshots
+    --      SERVICE_PRICE/RETURN_SHIPPING_FEE/TOTAL_AMOUNT and
+    --      pkg_order_status.change_status moves STATUS from Pending Review
+    --      (the row's initial value) to Awaiting Payment.
+    --   3. Not matched: ORDERS is created with SERVICE_ID/MATCHED_ENTRY_ID/
+    --      every price column NULL and STATUS left at Pending Review --
+    --      pkg_review.confirm_compatibility (TASK-040) is what later sets
+    --      those once an admin confirms a service by hand.
+    --
+    -- Every INSERT (ORDERS, ORDER_PHOTO via pkg_security.store_order_photo,
+    -- ORDER_ANSWER, the first ORDER_STATUS_HISTORY row) plus, on the
+    -- matched path, pkg_pricing.price_order and
+    -- pkg_order_status.change_status, happens behind a single internal
+    -- SAVEPOINT -- an exception at any point rolls the whole call back to
+    -- that savepoint and re-raises, so a partial order is never left behind
+    -- even if the caller's own error handling does nothing special (see
+    -- pkg_order.pkb's header comment).
+    --
+    -- TASK-028: once that write block has completed without raising (i.e.
+    -- the order is fully and correctly built, and the only thing left is
+    -- for the caller to COMMIT), submit_order dispatches email #1
+    -- (ORDER_SUBMITTED, to the customer, worded for whichever path this
+    -- order took) and email #5 (ADMIN_NEW_ORDER, to APP_SETTING.ADMIN_EMAIL)
+    -- via pkg_notify.send_once -- see pkg_order.pkb's header comment for why
+    -- this is positioned there rather than after an actual COMMIT statement.
+    -- ------------------------------------------------------------------------
+    PROCEDURE submit_order(
+        p_vehicle_id             IN  NUMBER,
+        p_category_id            IN  NUMBER,
+        p_part_number            IN  VARCHAR2,
+        p_service_id             IN  NUMBER DEFAULT NULL,
+        p_description            IN  CLOB,
+        p_customer_name          IN  VARCHAR2,
+        p_customer_email         IN  VARCHAR2,
+        p_customer_phone         IN  VARCHAR2,
+        p_return_address_street  IN  VARCHAR2,
+        p_return_address_city    IN  VARCHAR2,
+        p_return_address_state   IN  VARCHAR2 DEFAULT 'HI',
+        p_return_address_zip     IN  VARCHAR2,
+        p_answers                IN  t_answer_input_tab,
+        p_photos                 IN  t_photo_input_tab,
+        p_idempotency_key        IN  VARCHAR2,
+        p_order_id               OUT NUMBER,
+        p_tracking_token         OUT VARCHAR2
+    );
+
+END pkg_order;
+/
+
+
+PROMPT ==========================================================
+PROMPT --- Package spec: pkg_notify (packages/pkg_notify.pks) ---
+PROMPT ==========================================================
+
+-- ============================================================================
+-- pkg_notify.pks
+-- TASK-027: transactional-email infrastructure (PRD section 9's 5 triggers).
+--
+-- Manual prerequisites (none of this is possible from plain SQL, which is
+-- exactly why this task's own acceptance criteria list them separately from
+-- the PL/SQL deliverable):
+--   1. SMTP relay (OCI Email Delivery, SendGrid, or Mailgun) configured at
+--      instance or workspace level (App Builder -> Workspace Utilities, or
+--      Instance Administration for an instance-level relay). This session
+--      has no live App Builder access, so it cannot be done here -- see
+--      pkg_notify.pkb's header for the same note repeated where it matters
+--      operationally.
+--   2. The sender address in APP_SETTING.MAIL_FROM approved with that SMTP
+--      provider (Approved Sender, or SPF/DKIM records on the sending
+--      domain) -- otherwise every send() call below will queue successfully
+--      but never actually deliver.
+--   3. Five Email Templates created in f94517 Shared Components -> Email
+--      Templates, each with its Static ID set EXACTLY to one of the
+--      EMAIL_LOG.EMAIL_TYPE values already fixed by CK_EMAIL_LOG_TYPE
+--      (database/ddl/040_constraints.sql):
+--        ORDER_SUBMITTED, PAYMENT_LINK, MODULE_RECEIVED, SHIPPED_BACK,
+--        ADMIN_NEW_ORDER
+--      pkg_notify.send passes p_email_type straight through as
+--      APEX_MAIL.SEND's p_template_static_id, so the Static ID must match
+--      one of those five strings exactly (case-sensitive). This is App
+--      Builder-only work (per this
+--      project's "never hand-edit apex/f*.sql" rule) and needs a live
+--      session -- see TASK-028/029/031 for what each template's own subject/
+--      body and #PLACEHOLDER# markup should say.
+--
+-- Every template can rely on five placeholders pkg_notify.default_placeholders
+-- always supplies: #ORDER_ID#, #CUSTOMER_NAME#, #TRACKING_TOKEN#,
+-- #TRACKING_URL# (the public f92606 Page 30 tracking link), #ORDER_STATUS#.
+-- The caller of send() (TASK-028/029/031, one per trigger) supplies whatever
+-- else that specific template needs (e.g. #PAYMENT_URL# for PAYMENT_LINK,
+-- #RETURN_TRACKING_NO# for SHIPPED_BACK) via p_extra_placeholders, a JSON
+-- object CLOB merged on top of the defaults (JSON_MERGEPATCH -- its own keys
+-- win on conflict).
+-- ============================================================================
+CREATE OR REPLACE PACKAGE pkg_notify AUTHID DEFINER AS
+
+    -- ------------------------------------------------------------------------
+    -- default_placeholders
+    -- Builds the JSON object of the five placeholders every template can
+    -- rely on (see header) for p_order_id, as a CLOB ready to pass to
+    -- send()'s p_extra_placeholders (or to JSON_MERGEPATCH with a caller's
+    -- own extra fields before calling send -- send() does this same merge
+    -- internally, so most callers never need to call this directly; it is
+    -- exposed for previewing/testing what a template would receive).
+    -- Raises -20090 if p_order_id does not exist.
+    -- ------------------------------------------------------------------------
+    FUNCTION default_placeholders(p_order_id IN NUMBER) RETURN CLOB;
+
+    -- ------------------------------------------------------------------------
+    -- send
+    -- Sends one of the 5 transactional emails for p_order_id via
+    -- APEX_MAIL.SEND (its template overload, APEX 23.1+) against the Email Template whose
+    -- Static ID equals p_email_type, and writes exactly one EMAIL_LOG row
+    -- (SUCCESS or FAILED) regardless of outcome.
+    --
+    -- p_extra_placeholders: an optional JSON object CLOB (e.g.
+    -- '{"PAYMENT_URL":"https://...","AMOUNT":"245.00"}') merged over
+    -- default_placeholders(p_order_id) -- its keys win on conflict. NULL is
+    -- fine for a template that only needs the five defaults.
+    --
+    -- p_recipient_override: NULL sends to ORDERS.CUSTOMER_EMAIL, except for
+    -- ADMIN_NEW_ORDER which defaults to APP_SETTING.ADMIN_EMAIL. Pass a
+    -- value here to send somewhere else instead (mainly for testing).
+    --
+    -- Deliberately never raises for a mail/template/SMTP failure -- only
+    -- for a programming error (unknown p_order_id: -20090, unknown
+    -- p_email_type: -20095). Any failure from APEX_MAIL itself is caught,
+    -- written to EMAIL_LOG as FAILED with the error text, and swallowed, so
+    -- the business transaction that triggered the email (order submission,
+    -- a status change, ...) is never rolled back by an email delivery
+    -- problem -- this is this task's own acceptance criterion, not a
+    -- shortcut. The EMAIL_LOG write itself is autonomous (survives even if
+    -- the caller's own transaction later rolls back for an unrelated
+    -- reason), since an email that was actually queued/sent is an
+    -- irreversible side effect that the log must keep recording regardless.
+    --
+    -- Does NOT itself check "already sent" / enforce exactly-once -- that
+    -- guarantee is send_once's job (below). send() is deliberately just
+    -- "send this one, right now, and log it"; most callers should use
+    -- send_once instead unless they specifically want an unconditional
+    -- (re)send.
+    -- ------------------------------------------------------------------------
+    PROCEDURE send(
+        p_order_id           IN NUMBER,
+        p_email_type         IN VARCHAR2,
+        p_extra_placeholders IN CLOB DEFAULT NULL,
+        p_recipient_override IN VARCHAR2 DEFAULT NULL
+    );
+
+    -- ------------------------------------------------------------------------
+    -- already_sent
+    -- TRUE if EMAIL_LOG already has a row for this (p_order_id,
+    -- p_email_type) pair, regardless of whether that attempt's RESULT was
+    -- SUCCESS or FAILED -- "exactly once" here means "attempted once", not
+    -- "delivered once": a FAILED row still represents a real APEX_MAIL call
+    -- that was made, and silently retrying it on every subsequent call
+    -- (e.g. every idempotent pkg_order.submit_order replay) would defeat
+    -- the "once" guarantee just as surely as sending twice would. A caller
+    -- that specifically wants to retry a FAILED send does so explicitly via
+    -- send(), not send_once().
+    -- ------------------------------------------------------------------------
+    FUNCTION already_sent(p_order_id IN NUMBER, p_email_type IN VARCHAR2) RETURN BOOLEAN;
+
+    -- ------------------------------------------------------------------------
+    -- send_once
+    -- send(), guarded by already_sent -- a no-op if EMAIL_LOG already has a
+    -- row for this (p_order_id, p_email_type). This is what every trigger
+    -- point (TASK-028/029/031) should call instead of send() directly, so
+    -- "each email is sent exactly once per order" (each of those tasks' own
+    -- acceptance criteria) holds automatically even when the caller itself
+    -- might run more than once for the same order -- e.g.
+    -- pkg_order.submit_order's idempotent-replay branch, or an admin
+    -- retrying a status change.
+    -- ------------------------------------------------------------------------
+    PROCEDURE send_once(
+        p_order_id           IN NUMBER,
+        p_email_type         IN VARCHAR2,
+        p_extra_placeholders IN CLOB DEFAULT NULL,
+        p_recipient_override IN VARCHAR2 DEFAULT NULL
+    );
+
+    -- ------------------------------------------------------------------------
+    -- admin_order_url
+    -- Builds the f94517 (admin) Page 11 order-detail link for p_order_id --
+    -- e.g. for the ADMIN_NEW_ORDER email's #ADMIN_ORDER_URL# placeholder
+    -- (TASK-028). A sibling to default_placeholders' own #TRACKING_URL#
+    -- construction, just pointed at the admin app instead of the public
+    -- one -- kept here, rather than duplicated in every admin-facing
+    -- caller, since this package already owns APP_BASE_URL/app-link logic.
+    -- ------------------------------------------------------------------------
+    FUNCTION admin_order_url(p_order_id IN NUMBER) RETURN VARCHAR2;
+
+END pkg_notify;
+/
+
+
+PROMPT ==========================================================
+PROMPT --- Package spec: pkg_stripe (packages/pkg_stripe.pks) ---
+PROMPT ==========================================================
+
+-- ============================================================================
+-- pkg_stripe.pks
+-- TASK-030: create a Stripe Payment Link for an order and read it back.
+-- TASK-031: create_payment_link now also refuses any order not currently in
+-- Awaiting Payment status (see its own comment below) -- no other public
+-- signature changed by this task; the payment-gate wiring itself (calling
+-- this from pkg_order_status on the transition, and email #2) lives in
+-- pkg_order_status.pkb.
+-- TASK-032/033: added handle_event -- the single entry point the
+-- database/ords/stripe_webhook.sql ORDS module calls for every inbound
+-- Stripe webhook delivery. See handle_event's own comment below for the
+-- signature-verification / idempotency design (TASK-033) and the event
+-- processing itself (TASK-032).
+--
+-- TASK-033 manual prerequisite, same shape as TASK-030's Web Credential
+-- above but for a different reason: Stripe's webhook signing secret
+-- (whsec_...) must be usable from PL/SQL to compute an HMAC ourselves (see
+-- handle_event), and APEX's Web Credentials are write-only from PL/SQL --
+-- APEX_WEB_SERVICE can attach one to an OUTBOUND request via
+-- p_credential_static_id, but there is no API to read a Web Credential's
+-- secret back out for a computation like this. So, per this task's own
+-- acceptance criteria ("Web Credential or protected APP_SETTING"), the
+-- webhook secret is instead stored as APP_SETTING.STRIPE_WEBHOOK_SECRET.
+-- The row seeded by database/seed/010_reference_data.sql is a PLACEHOLDER
+-- value ('whsec_REPLACE_ME') -- an admin must overwrite it with the real
+-- signing secret from the Stripe Dashboard (Developers -> Webhooks -> the
+-- registered endpoint -> Signing secret) directly in the live table once
+-- the ORDS endpoint below is registered and its public URL is known to
+-- give Stripe. The real secret is never committed to this repository.
+--
+-- Manual prerequisite (cannot be done from SQL -- this is exactly why PRD
+-- 10 / this task's acceptance criteria require it to live outside code and
+-- git in the first place): before this package can be called, a Web
+-- Credential must exist in this workspace's Shared Components -> Web
+-- Credentials with:
+--   Static ID:      STRIPE_SECRET_KEY   (must match c_credential_static_id
+--                                        in pkg_stripe.pkb exactly)
+--   Auth Type:      HTTP Basic Authentication
+--   Username:       the Stripe secret key (sk_test_... in test mode,
+--                    sk_live_... in production -- Stripe's own convention
+--                    is "API key as the Basic-Auth username, password
+--                    blank")
+--   Password:       left blank
+-- The key itself is never stored in this repository -- pkg_stripe only
+-- ever references it by STATIC ID via APEX_WEB_SERVICE's
+-- p_credential_static_id, which resolves it server-side at request time.
+-- ============================================================================
+CREATE OR REPLACE PACKAGE pkg_stripe AUTHID DEFINER AS
+
+    -- ------------------------------------------------------------------------
+    -- create_payment_link
+    -- Creates a Stripe Payment Link (POST /v1/payment_links) for
+    -- p_order_id with two line items -- the order's confirmed service (at
+    -- its snapshotted ORDERS.SERVICE_PRICE) and Return Shipping (at
+    -- ORDERS.RETURN_SHIPPING_FEE) -- and metadata.order_id set to
+    -- p_order_id (so the Stripe webhook handler, TASK-032, can resolve the
+    -- order from the event without any other lookup). Stores the returned
+    -- link id on ORDERS.STRIPE_PAYMENT_LINK_ID and returns the link's
+    -- checkout URL (needed once, immediately, for email #2 -- TASK-031 --
+    -- and not persisted anywhere else, since Stripe can always be asked
+    -- for it again by id).
+    --
+    -- Requires the order to already be priced (ORDERS.SERVICE_PRICE and
+    -- RETURN_SHIPPING_FEE both set -- i.e. pkg_pricing.price_order has
+    -- already run for it) and to have a SERVICE_ID -- raises -20090/-20091
+    -- otherwise.
+    --
+    -- TASK-031: also requires ORDERS.STATUS to currently be 'Awaiting
+    -- Payment' -- raises -20096 otherwise. This is this task's own
+    -- acceptance criteria ("pkg_stripe.create_payment_link refuses an
+    -- order in any other status"), checked here rather than only relying
+    -- on pkg_order_status being this function's sole real-world caller, so
+    -- the guarantee holds for a direct call too (e.g. from SQL Workshop, or
+    -- a future admin action that calls this package without going through
+    -- change_status). Checked before the idempotent branch below, so even
+    -- a REPEATED call for an order that has since moved on (e.g. to
+    -- Payment Received after the customer already paid) is refused rather
+    -- than quietly re-returning the old link's URL.
+    --
+    -- Idempotent within Awaiting Payment: if ORDERS.STRIPE_PAYMENT_LINK_ID
+    -- is already set for this order, no new link is created -- the
+    -- existing link's current URL is re-fetched from Stripe and returned
+    -- instead (TASK-031's "a repeated call does not create a second link"
+    -- requirement holds even called directly, not only through the caller
+    -- pkg_order_status.change_status uses).
+    --
+    -- On any Stripe API failure (network error, non-2xx response, or a 2xx
+    -- response missing id/url), the failure is written to APP_ERROR_LOG
+    -- (in its own autonomous transaction, so the log entry survives even
+    -- if the caller's transaction is rolled back after the exception this
+    -- raises) and re-raised as -20092/-20093 with a readable message.
+    -- ------------------------------------------------------------------------
+    FUNCTION create_payment_link(p_order_id IN NUMBER) RETURN VARCHAR2;
+
+    -- ------------------------------------------------------------------------
+    -- get_payment_link_status
+    -- Reads back the Payment Link already created for p_order_id (GET
+    -- /v1/payment_links/{id}) and returns 'ACTIVE' or 'INACTIVE' based on
+    -- Stripe's own "active" flag on the Payment Link object -- this is
+    -- whether the link itself is still usable, NOT whether the order has
+    -- been paid (payment completion arrives via the webhook, TASK-032/033,
+    -- not by polling this). Mainly a verification/diagnostic entry point:
+    -- proving the create -> read round-trip works end-to-end against
+    -- Stripe test mode is this task's own acceptance criterion.
+    --
+    -- Raises -20090 for an unknown ORDER_ID, -20094 if the order has no
+    -- payment link yet, or -20092 on a Stripe API failure (see
+    -- create_payment_link).
+    -- ------------------------------------------------------------------------
+    FUNCTION get_payment_link_status(p_order_id IN NUMBER) RETURN VARCHAR2;
+
+    -- ------------------------------------------------------------------------
+    -- handle_event
+    -- TASK-032/033. Called by database/ords/stripe_webhook.sql's POST
+    -- handler for every Stripe webhook delivery, with the raw request body
+    -- (p_payload, exactly as Stripe sent it -- signature verification needs
+    -- the UNMODIFIED bytes, so the ORDS module must not re-serialize or
+    -- reformat it) and the raw Stripe-Signature request header
+    -- (p_signature_header). Never raises -- every outcome, including a
+    -- malformed request, is reported back through p_status_code/
+    -- p_response_body so the ORDS handler can set the HTTP response
+    -- without its own exception handling.
+    --
+    -- TASK-033 (checked first, before ANY database write):
+    --   1. p_signature_header must be present and parse into a t= (unix
+    --      timestamp) and at least one v1= (hex HMAC-SHA256 signature)
+    --      field.
+    --   2. Its HMAC-SHA256 (hand-built via STANDARD_HASH/UTL_RAW, key = APP_SETTING.
+    --      STRIPE_WEBHOOK_SECRET) over "<t>.<raw body>" must match the v1=
+    --      value.
+    --   3. t= must be within c_timestamp_tolerance_seconds (see pkb) of the
+    --      current time, so a captured request can't be replayed
+    --      indefinitely.
+    --   A missing header, an unparseable header, a mismatched signature, an
+    --   unconfigured webhook secret, or a stale timestamp all fail
+    --   verification the same way: p_status_code := 400, nothing is written
+    --   to the database (TASK-033 acceptance criteria: "returns 400 and
+    --   changes nothing").
+    --
+    -- TASK-032/033 (once signature verification passes):
+    --   4. The event's own id (JSON $.id) is inserted into STRIPE_EVENT,
+    --      whose UNIQUE (event_id) constraint makes a retried/duplicate
+    --      Stripe delivery a no-op -- caught as DUP_VAL_ON_INDEX and
+    --      answered with a plain 200 (Stripe stops retrying), no
+    --      reprocessing.
+    --   5. Only $.type = 'checkout.session.completed' (how a paid Stripe
+    --      Payment Link surfaces to a webhook) is acted on -- every other
+    --      event type is still recorded in STRIPE_EVENT (for audit) but
+    --      otherwise ignored, answered 200 (TASK-032 acceptance criteria:
+    --      "ignores unknown event types").
+    --   6. For that event type, the order is resolved from
+    --      $.data.object.metadata.order_id (the metadata
+    --      create_payment_link, TASK-030, put on the Payment Link and that
+    --      Stripe carries onto the Checkout Session it creates), ORDERS.
+    --      STRIPE_PAYMENT_STATUS is updated from $.data.object.
+    --      payment_status, and pkg_order_status.change_status moves the
+    --      order to 'Payment Received' with p_changed_by => 'SYSTEM' (this
+    --      task's acceptance criteria).
+    --   7. Any failure resolving the order or advancing its status
+    --      (unresolvable order_id, an order already past Payment Received,
+    --      ...) is logged to APP_ERROR_LOG and swallowed -- the response is
+    --      still 200, since the event itself was validly received and
+    --      recorded (STRIPE_EVENT.PROCESSED stays 'N'); the alternative
+    --      (a non-2xx response) would just make Stripe retry the same
+    --      delivery forever for a problem retrying can't fix.
+    --
+    -- Responds quickly by design (TASK-032 acceptance criteria): every step
+    -- above is a handful of single-row lookups/updates and one CPU-bound
+    -- HMAC computation, no external calls.
+    -- ------------------------------------------------------------------------
+    PROCEDURE handle_event(
+        p_payload           IN  CLOB,
+        p_signature_header  IN  VARCHAR2,
+        p_status_code        OUT PLS_INTEGER,
+        p_response_body        OUT VARCHAR2
+    );
+
+END pkg_stripe;
+/
+
+
+PROMPT ==========================================================
+PROMPT --- Package spec: pkg_review (packages/pkg_review.pks) ---
+PROMPT ==========================================================
+
+-- ============================================================================
+-- pkg_review.pks
+-- TASK-040: admin confirmation of compatibility for a Pending Review order
+-- (PRD 4.2/5.2: "an unmatched Part Number is routed to a manual review
+-- queue before payment unlocks").
+--
+-- confirm_compatibility is the ONLY procedure in this schema allowed to
+-- move an order out of Pending Review directly (as opposed to a matched
+-- order, which pkg_order.submit_order, TASK-015, already starts at
+-- Awaiting Payment). It is the admin's counterpart to pkg_compat.find_match
+-- (TASK-013): where find_match only ever reads COMPATIBILITY_ENTRY/
+-- COMPATIBILITY_SERVICE, this is the one place those tables are written
+-- with SOURCE = 'ADMIN_CONFIRMED' -- the other provenance value, 'IMPORT',
+-- is written only by pkg_import (TASK-044).
+--
+-- Once this runs for one order's (VEHICLE_ID, CATEGORY_ID, PART_NUMBER),
+-- every later order for that same triple matches automatically via
+-- pkg_compat.find_match -- no code change needed for that; it falls out of
+-- find_match querying the same COMPATIBILITY_ENTRY/COMPATIBILITY_SERVICE
+-- rows this procedure writes (TASK-040 acceptance criteria, verified in
+-- test_pkg_review.sql by calling find_match again after confirming).
+-- ============================================================================
+CREATE OR REPLACE PACKAGE pkg_review AUTHID DEFINER AS
+
+    -- ------------------------------------------------------------------------
+    -- The set of SERVICE_IDs the admin confirms as supported for this
+    -- Part Number/vehicle/category combination -- i.e. the full
+    -- COMPATIBILITY_SERVICE link set for the COMPATIBILITY_ENTRY this call
+    -- creates or updates, not just the one service this particular order
+    -- needs (p_selected_service_id, below, is that one). Associative array
+    -- (not a SQL-level collection type) because the only caller is PL/SQL --
+    -- an APEX page process building it from a multi-select item or a
+    -- collection (TASK-042's f94517 Page 21 modal) -- never a SQL query.
+    -- Populate densely from index 1, same convention as pkg_order's
+    -- t_answer_input_tab/t_photo_input_tab -- confirm_compatibility
+    -- iterates 1 .. p_service_ids.COUNT, so a sparse array would silently
+    -- skip entries.
+    -- ------------------------------------------------------------------------
+    TYPE t_service_id_tab IS TABLE OF service.service_id%TYPE INDEX BY PLS_INTEGER;
+
+    -- ------------------------------------------------------------------------
+    -- confirm_compatibility
+    -- For p_order_id (must currently be Pending Review -- raises -20101
+    -- otherwise):
+    --   1. Creates or updates the COMPATIBILITY_ENTRY for the order's
+    --      (VEHICLE_ID, CATEGORY_ID, PART_NUMBER_ENTERED) with
+    --      SOURCE = 'ADMIN_CONFIRMED' (a MERGE on the same natural key
+    --      pkg_compat.find_match looks up by, UX_COMPAT_ENTRY_LOOKUP --
+    --      if an entry already exists there, e.g. from a very recent
+    --      import that ran after this order was submitted, its SOURCE is
+    --      upgraded to ADMIN_CONFIRMED rather than a duplicate being
+    --      created).
+    --   2. Syncs that entry's COMPATIBILITY_SERVICE links to exactly
+    --      p_service_ids -- adds any missing, removes any no longer
+    --      confirmed. Every id in p_service_ids must reference an existing
+    --      SERVICE row (raises -20104 naming the first bad id otherwise)
+    --      and the array must not be empty (raises -20102).
+    --   3. Sets ORDERS.MATCHED_ENTRY_ID to that entry and ORDERS.
+    --      SERVICE_ID to p_selected_service_id -- the one service, among
+    --      the confirmed set, this particular order is for. Must be one of
+    --      p_service_ids (raises -20103 otherwise -- an order can't be
+    --      priced for a service its own compatibility entry doesn't
+    --      confirm).
+    --   4. Snapshots prices via pkg_pricing.price_order(p_order_id,
+    --      p_selected_service_id) -- the same, only, pricing entry point
+    --      the matched-at-submission path uses (TASK-014).
+    --   5. Moves the order to Awaiting Payment via pkg_order_status.
+    --      change_status (TASK-012), which in turn creates the Stripe
+    --      Payment Link and sends email #2 (TASK-031) -- confirm_
+    --      compatibility does not duplicate any of that, it only reaches
+    --      the state that hook fires on.
+    --
+    -- All five steps run under one SAVEPOINT: any failure (including one
+    -- raised deep inside change_status/price_order) rolls back everything
+    -- this call wrote -- the COMPATIBILITY_ENTRY/COMPATIBILITY_SERVICE
+    -- changes included -- and re-raises, so a partially-confirmed
+    -- compatibility entry is never left behind by a failed call. Same
+    -- "guarantee cleanup, then re-raise" shape pkg_order.submit_order uses
+    -- for its own atomicity.
+    --
+    -- p_changed_by: passed straight through to change_status (NULL, the
+    -- default, resolves to the live APEX session's APP_USER there -- this
+    -- is always an authenticated f94517 admin action, never a SYSTEM one,
+    -- so no caller of this procedure is expected to pass an explicit
+    -- value; the parameter exists only so a test script outside an APEX
+    -- session can).
+    --
+    -- Raises -20100 for an unknown p_order_id, -20101 if it is not
+    -- currently Pending Review, -20102 for an empty p_service_ids,
+    -- -20103 if p_selected_service_id is not in p_service_ids, -20104 if
+    -- any id in p_service_ids does not exist in SERVICE, or whatever
+    -- pkg_pricing/pkg_order_status themselves raise for a problem at
+    -- steps 4-5 (both already validate their own inputs independently).
+    -- ------------------------------------------------------------------------
+    PROCEDURE confirm_compatibility(
+        p_order_id             IN NUMBER,
+        p_service_ids          IN t_service_id_tab,
+        p_selected_service_id  IN NUMBER,
+        p_changed_by           IN VARCHAR2 DEFAULT NULL
+    );
+
+END pkg_review;
+/
+
+
+PROMPT ==========================================================
+PROMPT --- Package spec: pkg_import (packages/pkg_import.pks) ---
+PROMPT ==========================================================
+
+-- ============================================================================
+-- pkg_import.pks
+-- TASK-044: staging, validation and MERGE for bulk compatibility imports
+-- (PRD's admin-side "load a spreadsheet of known-good Part Numbers"
+-- workflow -- the bulk counterpart to pkg_review.confirm_compatibility,
+-- TASK-040, which confirms one Part Number at a time from an order).
+--
+-- CSV format (documented in full in README.md's "Bulk compatibility
+-- import" section -- summarized here since it drives every column/
+-- validation rule below):
+--   MAKE, MODEL, YEAR, CATEGORY, PART_NUMBER, SERVICE_NAMES
+-- One row per (vehicle, category, part number) combination.
+--   MAKE / MODEL       free text, matched/created in VEHICLE_REF.
+--   YEAR               a single 4-digit model year (1980-2100, matching
+--                       VEHICLE_REF.YEAR's own CK_VEHICLE_REF_YEAR) -- not
+--                       a range; a Make/Model spanning several years needs
+--                       one CSV row per year, same as VEHICLE_REF itself
+--                       (see its own DDL comment).
+--   CATEGORY           one of the 5 fixed MODULE_CATEGORY names (e.g.
+--                       "ECM/PCM") -- matched case-insensitively.
+--   PART_NUMBER         the Part Number this row confirms compatibility
+--                       for.
+--   SERVICE_NAMES        one or more SERVICE.NAME values confirmed
+--                       supported for this Part Number, PIPE-separated
+--                       ("Cloning|VIN Write") -- matched case-insensitively
+--                       against services in the row's own CATEGORY only.
+--
+-- Three-step workflow, matching the staging table's STATUS lifecycle
+-- (COMPAT_IMPORT_STG.STATUS: PENDING -> VALID/INVALID -> APPLIED):
+--   1. start_batch   stages every row as-is (no validation yet).
+--   2. validate_batch marks each PENDING row VALID or INVALID, with a
+--      human-readable ERROR_TEXT for the latter -- never raises for a bad
+--      row itself, only for a batch-level problem (unknown batch).
+--   3. apply_batch    MERGEs every VALID row into VEHICLE_REF/
+--      COMPATIBILITY_ENTRY/COMPATIBILITY_SERVICE (SOURCE = 'IMPORT'),
+--      marking each APPLIED as it goes; never touches an INVALID row.
+-- Splitting these into three calls (rather than one do-everything
+-- procedure) is what lets TASK-045's f94517 Page 31 show a preview
+-- (get_batch_rows below) between staging and committing the import to the
+-- live compatibility catalog.
+-- ============================================================================
+CREATE OR REPLACE PACKAGE pkg_import AUTHID DEFINER AS
+
+    -- ------------------------------------------------------------------------
+    -- One CSV data row as read by the caller (an APEX page process parsing
+    -- an uploaded file, or a test script) -- raw text in every field,
+    -- exactly as the CSV had it; start_batch stores it as-is, unvalidated.
+    -- Associative array, dense from index 1, same convention as pkg_order's
+    -- t_answer_input_tab/t_photo_input_tab and pkg_review's
+    -- t_service_id_tab -- the only caller is PL/SQL, never a SQL query.
+    -- ------------------------------------------------------------------------
+    TYPE t_row_input IS RECORD (
+        make_raw           VARCHAR2(200),
+        model_raw          VARCHAR2(200),
+        year_raw           VARCHAR2(200),
+        category_raw       VARCHAR2(200),
+        part_number_raw    VARCHAR2(200),
+        service_names_raw  VARCHAR2(4000)
+    );
+    TYPE t_row_input_tab IS TABLE OF t_row_input INDEX BY PLS_INTEGER;
+
+    -- Row/collection type for get_batch_rows, declared here (not in the
+    -- body) so SQL can consume the pipelined function via
+    -- TABLE(pkg_import.get_batch_rows(:P_BATCH_ID)) -- same pattern as
+    -- pkg_compat.get_services/pkg_order_status.get_next_statuses -- the
+    -- source TASK-045's f94517 Page 31 preview Interactive Report will use.
+    TYPE t_stg_row IS RECORD (
+        stg_id             compat_import_stg.stg_id%TYPE,
+        row_num            compat_import_stg.row_num%TYPE,
+        make_raw           compat_import_stg.make_raw%TYPE,
+        model_raw          compat_import_stg.model_raw%TYPE,
+        year_raw           compat_import_stg.year_raw%TYPE,
+        category_raw       compat_import_stg.category_raw%TYPE,
+        part_number_raw    compat_import_stg.part_number_raw%TYPE,
+        service_names_raw  compat_import_stg.service_names_raw%TYPE,
+        status             compat_import_stg.status%TYPE,
+        error_text         compat_import_stg.error_text%TYPE
+    );
+    TYPE t_stg_row_tab IS TABLE OF t_stg_row;
+
+    -- ------------------------------------------------------------------------
+    -- start_batch
+    -- Generates a new BATCH_ID (format IMPB-<YYYYMMDDHH24MISS>-<6 random
+    -- uppercase chars> -- readable and, for all practical purposes,
+    -- collision-free even for two batches started in the same second) and
+    -- stages every row of p_rows into COMPAT_IMPORT_STG with STATUS =
+    -- 'PENDING', ROW_NUM = 1, 2, 3, ... in p_rows order. Does not validate
+    -- anything -- call validate_batch next. Raises -20140 if p_rows is
+    -- empty.
+    -- ------------------------------------------------------------------------
+    FUNCTION start_batch(p_rows IN t_row_input_tab) RETURN VARCHAR2;
+
+    -- ------------------------------------------------------------------------
+    -- validate_batch
+    -- Validates every PENDING row of p_batch_id (a row already VALID/
+    -- INVALID/APPLIED from an earlier call is left untouched -- safe to
+    -- call more than once on the same batch, e.g. after fixing referenced
+    -- data). For each row, checks (collecting ALL problems found into one
+    -- semicolon-separated ERROR_TEXT, not just the first):
+    --   - MAKE_RAW / MODEL_RAW: present, and each <= 50 characters
+    --     (VEHICLE_REF.MAKE/MODEL's width).
+    --   - YEAR_RAW: a plain 4-digit number, 1980-2100 (VEHICLE_REF's own
+    --     CK_VEHICLE_REF_YEAR range).
+    --   - CATEGORY_RAW: matches an existing MODULE_CATEGORY.NAME
+    --     (case-insensitive).
+    --   - PART_NUMBER_RAW: present, and <= 100 characters
+    --     (COMPATIBILITY_ENTRY.PART_NUMBER's width).
+    --   - SERVICE_NAMES_RAW: present, splits (on '|') into at least one
+    --     non-empty name, and every name matches an existing SERVICE.NAME
+    --     *within the row's own CATEGORY_RAW* (case-insensitive) -- a
+    --     service that exists but belongs to a different category is
+    --     still an error, naming which service and which category it
+    --     actually belongs to.
+    -- A row with zero problems is marked VALID; otherwise INVALID with
+    -- ERROR_TEXT set. Never raises for a bad row -- only for a batch-level
+    -- problem: -20141 if p_batch_id does not exist (zero rows in
+    -- COMPAT_IMPORT_STG for it).
+    -- ------------------------------------------------------------------------
+    PROCEDURE validate_batch(p_batch_id IN VARCHAR2);
+
+    -- ------------------------------------------------------------------------
+    -- apply_batch
+    -- MERGEs every VALID row of p_batch_id into the live compatibility
+    -- catalog, marking each APPLIED as it succeeds:
+    --   - VEHICLE_REF: adds (MAKE_RAW, MODEL_RAW, YEAR_RAW) if missing
+    --     (MERGE on its own UQ_VEHICLE_REF natural key).
+    --   - COMPATIBILITY_ENTRY: adds (vehicle, category, PART_NUMBER_RAW)
+    --     with SOURCE = 'IMPORT' if missing. If an entry already exists,
+    --     its SOURCE is left exactly as-is -- an import NEVER downgrades
+    --     an ADMIN_CONFIRMED entry (pkg_review, TASK-040) back to IMPORT;
+    --     that asymmetry (pkg_review DOES upgrade IMPORT -> ADMIN_CONFIRMED)
+    --     is intentional: an admin's explicit per-order confirmation is a
+    --     stronger signal than a bulk file, in either direction.
+    --   - COMPATIBILITY_SERVICE: adds a link for each of this row's
+    --     confirmed services if missing -- ADDITIVE only, never removes an
+    --     existing link (unlike pkg_review.confirm_compatibility's full
+    --     replace-the-set semantics for one order's admin review; an
+    --     import is understood as "here is more confirmed data", not "here
+    --     is the complete, authoritative list", since it is normal to run
+    --     several incremental import batches over time).
+    -- Never duplicates: every write above is a MERGE keyed on the same
+    -- natural/unique keys those tables already enforce, so re-running
+    -- apply_batch (on the same batch, or a later batch with overlapping
+    -- rows) is always a no-op for data already present.
+    --
+    -- Each row is applied under its own SAVEPOINT: if one row fails
+    -- unexpectedly (e.g. a referenced SERVICE was deleted between
+    -- validate_batch and this call -- validate_batch's own checks make
+    -- every other failure mode here effectively unreachable for a row it
+    -- already marked VALID), that row's writes are rolled back, the row is
+    -- reset to INVALID with the runtime error as ERROR_TEXT, and the loop
+    -- continues -- one bad row never aborts the rest of the batch.
+    --
+    -- p_applied_count / p_skipped_count: how many rows were newly marked
+    -- APPLIED vs. left alone (already non-VALID -- INVALID, PENDING never
+    -- validated, or already APPLIED from an earlier call). Raises -20141
+    -- (same as validate_batch) if p_batch_id does not exist.
+    -- ------------------------------------------------------------------------
+    PROCEDURE apply_batch(
+        p_batch_id       IN  VARCHAR2,
+        p_applied_count  OUT PLS_INTEGER,
+        p_skipped_count  OUT PLS_INTEGER
+    );
+
+    -- ------------------------------------------------------------------------
+    -- get_batch_rows
+    -- Pipelined: every COMPAT_IMPORT_STG row for p_batch_id, ordered by
+    -- ROW_NUM -- the preview source TASK-045's f94517 Page 31 Interactive
+    -- Report will use (TABLE(pkg_import.get_batch_rows(:P_BATCH_ID))), so
+    -- an admin can see each row's status/error before committing to
+    -- apply_batch. Zero rows for an unknown p_batch_id -- never raises,
+    -- same "a report source should not itself blow up on empty data"
+    -- reasoning pkg_compat.get_services documents for itself.
+    -- ------------------------------------------------------------------------
+    FUNCTION get_batch_rows(p_batch_id IN VARCHAR2) RETURN t_stg_row_tab PIPELINED;
+
+END pkg_import;
+/
+
+
+PROMPT ==========================================================
 PROMPT --- Package body: pkg_security (packages/pkg_security.pkb) ---
 PROMPT ==========================================================
 
@@ -1078,11 +2065,25 @@ PROMPT ==========================================================
 CREATE OR REPLACE PACKAGE BODY pkg_security AS
 
     c_max_file_size_bytes  CONSTANT NUMBER      := 10 * 1024 * 1024; -- 10 MB (TASK-011 acceptance criteria)
-    c_token_bytes           CONSTANT PLS_INTEGER := 32;               -- DBMS_CRYPTO.RANDOMBYTES(32) (TASK-011 acceptance criteria)
+    c_token_bytes           CONSTANT PLS_INTEGER := 32;               -- SHA-256 digest width (TASK-011 acceptance criteria)
     c_max_token_attempts     CONSTANT PLS_INTEGER := 10;               -- retries on a UNIQUE collision, then gives up loudly
 
     -- --------------------------------------------------------------------------
     -- generate_tracking_token
+    --
+    -- DEVIATION from the original design (live-verified 2026-09-24): this
+    -- workspace's schema has no EXECUTE privilege on DBMS_CRYPTO (a shared
+    -- apex.oracle.com Free Evaluation Workspace restriction -- confirmed by
+    -- a live PLS-00201 "identifier 'DBMS_CRYPTO' must be declared" compile
+    -- error, not something this schema can GRANT itself). DBMS_CRYPTO.
+    -- RANDOMBYTES is therefore replaced with STANDARD_HASH('...', 'SHA256')
+    -- -- a native SQL function needing no package privilege at all -- fed
+    -- with SYS_GUID() (server-generated, effectively unguessable) plus
+    -- DBMS_RANDOM (confirmed available: already used elsewhere in this
+    -- schema, e.g. pkg_import.start_batch's batch id) and a high-precision
+    -- timestamp for additional entropy. The SHA-256 digest is 32 bytes,
+    -- matching c_token_bytes exactly, so the rest of this function (unique-
+    -- ness retry loop, base64 encoding) is unchanged.
     -- --------------------------------------------------------------------------
     FUNCTION generate_tracking_token RETURN VARCHAR2 IS
         l_raw      RAW(32);
@@ -1090,7 +2091,18 @@ CREATE OR REPLACE PACKAGE BODY pkg_security AS
         l_exists   PLS_INTEGER;
     BEGIN
         FOR i IN 1 .. c_max_token_attempts LOOP
-            l_raw := DBMS_CRYPTO.RANDOMBYTES(c_token_bytes);
+            l_raw := STANDARD_HASH(
+                UTL_RAW.CONCAT(
+                    SYS_GUID(),
+                    SYS_GUID(),
+                    UTL_RAW.CAST_TO_RAW(
+                        DBMS_RANDOM.STRING('X', 64)
+                        || TO_CHAR(SYSTIMESTAMP, 'YYYYMMDDHH24MISSFF9')
+                        || TO_CHAR(i)
+                    )
+                ),
+                'SHA256'
+            );
 
             -- Standard base64 -> URL-safe base64, no padding:
             --   UTL_ENCODE.BASE64_ENCODE inserts a CRLF every 64 output
@@ -1227,91 +2239,6 @@ CREATE OR REPLACE PACKAGE BODY pkg_security AS
     END store_order_photo;
 
 END pkg_security;
-/
-
-
-PROMPT ==========================================================
-PROMPT --- Package spec: pkg_order_status (packages/pkg_order_status.pks) ---
-PROMPT ==========================================================
-
--- ============================================================================
--- pkg_order_status.pks
--- TASK-012: order status state machine, history and a notification hook.
--- TASK-029: filled in on_status_changed (see pkg_order_status.pkb) to send
--- email #3 (MODULE_RECEIVED) on the transition to Block Received and email
--- #4 (SHIPPED_BACK) on the transition to Ready / Shipped Back. No public
--- signature changed by this task.
--- TASK-031: filled in on_status_changed's last remaining branch -- on the
--- transition to Awaiting Payment, creates the Stripe Payment Link
--- (pkg_stripe.create_payment_link) and sends email #2 (PAYMENT_LINK). No
--- public signature changed by this task either.
---
--- The single place that is allowed to change ORDERS.STATUS -- enforced by
--- TRG_ORDERS_STATUS_GUARD (050_triggers.sql, TASK-006), which rejects any
--- UPDATE of ORDERS.STATUS not bracketed by PKG_ORDER_STATUS_CTX.allow_change
--- / done_changing, both of which only this package's change_status calls.
--- ============================================================================
-CREATE OR REPLACE PACKAGE pkg_order_status AUTHID DEFINER AS
-
-    -- Row/collection types for get_next_statuses, declared here (not in the
-    -- body) so SQL can consume the pipelined function via
-    -- TABLE(pkg_order_status.get_next_statuses(:P_ORDER_ID)) -- the pattern
-    -- TASK-037's f94517 admin select list will use as its LOV source.
-    TYPE t_next_status_row IS RECORD (
-        status_code  order_status_ref.status_code%TYPE,
-        display_seq  order_status_ref.display_seq%TYPE
-    );
-    TYPE t_next_status_tab IS TABLE OF t_next_status_row;
-
-    -- ------------------------------------------------------------------------
-    -- get_next_statuses
-    -- Pipelined: pipes zero or one row -- the single status this linear state
-    -- machine allows next for p_order_id's current status, or zero rows if
-    -- the order is in a terminal status (Completed) or doesn't exist. Zero-
-    -- or-one rather than "many" reflects the PRD's linear lifecycle (no
-    -- branching next steps in v1); still shaped as a table function so a
-    -- future non-linear transition (e.g. TASK-049's Block Received ->
-    -- Pending Review) can pipe more than one row without an interface
-    -- change.
-    -- ------------------------------------------------------------------------
-    FUNCTION get_next_statuses(p_order_id IN NUMBER) RETURN t_next_status_tab PIPELINED;
-
-    -- ------------------------------------------------------------------------
-    -- change_status
-    -- Validates p_new_status is the (only) allowed next status for the
-    -- order's current status, applies it (authorized via
-    -- PKG_ORDER_STATUS_CTX so TRG_ORDERS_STATUS_GUARD allows the UPDATE),
-    -- writes an ORDER_STATUS_HISTORY row, then calls the on_status_changed
-    -- hook (TASK-029/031: sends emails #2/#3/#4 for the three statuses that
-    -- need one, and creates the Stripe Payment Link for Awaiting Payment;
-    -- a no-op for every other status). Raises a readable error -- and
-    -- leaves ORDERS.STATUS unchanged -- on an invalid transition or an
-    -- unknown order id.
-    --
-    -- TASK-031: a change_status call that moves an order TO Awaiting
-    -- Payment therefore also creates that order's Stripe Payment Link as
-    -- part of the same call (via the hook) -- there is no separate step
-    -- the caller needs to take. A notification/Stripe failure in the hook
-    -- is logged (APP_ERROR_LOG) and swallowed, never raised back to this
-    -- procedure's caller -- see pkg_order_status.pkb's on_status_changed
-    -- comment for why.
-    --
-    -- p_changed_by: explicit actor (e.g. 'SYSTEM' from the Stripe webhook,
-    -- TASK-032). NULL (the default) resolves to the live APEX session's
-    -- APP_USER, falling back to 'SYSTEM' outside an APEX session (TASK-012
-    -- acceptance criteria).
-    -- p_comment: accepted now, unused until TASK-049 (Block Received ->
-    -- Pending Review requires one) -- keeping the parameter here means that
-    -- future task doesn't need to change this procedure's signature.
-    -- ------------------------------------------------------------------------
-    PROCEDURE change_status(
-        p_order_id    IN NUMBER,
-        p_new_status  IN VARCHAR2,
-        p_changed_by  IN VARCHAR2 DEFAULT NULL,
-        p_comment     IN VARCHAR2 DEFAULT NULL
-    );
-
-END pkg_order_status;
 /
 
 
@@ -1623,74 +2550,6 @@ END pkg_order_status;
 
 
 PROMPT ==========================================================
-PROMPT --- Package spec: pkg_compat (packages/pkg_compat.pks) ---
-PROMPT ==========================================================
-
--- ============================================================================
--- pkg_compat.pks
--- TASK-013: exact-match Part Number lookup and the confirmed-services list
--- for a matched compatibility entry.
---
--- This package is the ONLY place "is this Part Number supported?" is
--- decided (PRD 4.2: "the system never silently guesses"). find_match never
--- does a LIKE/fuzzy match -- an exact match on (vehicle_id, category_id,
--- normalized part_number) or nothing.
--- ============================================================================
-CREATE OR REPLACE PACKAGE pkg_compat AUTHID DEFINER AS
-
-    -- Row/collection types for get_services, declared here (not in the
-    -- body) so SQL can consume the pipelined function via
-    -- TABLE(pkg_compat.get_services(:AI_MATCHED_ENTRY_ID)) -- the pattern
-    -- TASK-019's f92606 service-selection Cards region will use as its source.
-    TYPE t_service_row IS RECORD (
-        service_id   service.service_id%TYPE,
-        name         service.name%TYPE,
-        price_tier   service.price_tier%TYPE,
-        tier_amount  price_tier.amount%TYPE
-    );
-    TYPE t_service_tab IS TABLE OF t_service_row;
-
-    -- ------------------------------------------------------------------------
-    -- find_match
-    -- Returns the matching COMPATIBILITY_ENTRY.ENTRY_ID for
-    -- (p_vehicle_id, p_category_id, p_part_number), or NULL if there is no
-    -- match.
-    --
-    -- Normalization: p_part_number is compared as UPPER(TRIM(p_part_number))
-    -- -- nothing more (no punctuation stripping, no fuzzy matching) --
-    -- against COMPATIBILITY_ENTRY.PART_NUMBER, which TRG_COMPAT_ENTRY_BIU
-    -- (TASK-006) already stores as UPPER(TRIM()), so this is a plain exact
-    -- string match on both sides, never a LIKE.
-    --
-    -- "No match" covers two distinct cases, both returning NULL:
-    --   1. No COMPATIBILITY_ENTRY row exists for this
-    --      (vehicle_id, category_id, part_number) triple at all.
-    --   2. A COMPATIBILITY_ENTRY row exists, but has zero linked
-    --      COMPATIBILITY_SERVICE rows (TASK-013 acceptance criteria: "An
-    --      entry with zero linked services counts as no match").
-    -- ------------------------------------------------------------------------
-    FUNCTION find_match(
-        p_vehicle_id   IN NUMBER,
-        p_category_id  IN NUMBER,
-        p_part_number  IN VARCHAR2
-    ) RETURN NUMBER;
-
-    -- ------------------------------------------------------------------------
-    -- get_services
-    -- Pipelined: the SERVICE rows confirmed supported for p_entry_id (i.e.
-    -- linked via COMPATIBILITY_SERVICE), each with its current tier price
-    -- already joined in. Ordered by SERVICE.NAME for a stable display order.
-    -- Zero rows for an entry with no linked services, or an unknown
-    -- p_entry_id -- never raises for either case, since a page/report
-    -- source should not itself blow up on empty data.
-    -- ------------------------------------------------------------------------
-    FUNCTION get_services(p_entry_id IN NUMBER) RETURN t_service_tab PIPELINED;
-
-END pkg_compat;
-/
-
-
-PROMPT ==========================================================
 PROMPT --- Package body: pkg_compat (packages/pkg_compat.pkb) ---
 PROMPT ==========================================================
 
@@ -1759,7 +2618,7 @@ CREATE OR REPLACE PACKAGE BODY pkg_compat AS
         ) LOOP
             l_row.service_id  := r.service_id;
             l_row.name        := r.name;
-            l_row.price_tier  := r.price_tier;
+            l_row.tier_code   := r.price_tier;
             l_row.tier_amount := r.tier_amount;
             PIPE ROW (l_row);
         END LOOP;
@@ -1768,77 +2627,6 @@ CREATE OR REPLACE PACKAGE BODY pkg_compat AS
     END get_services;
 
 END pkg_compat;
-/
-
-
-PROMPT ==========================================================
-PROMPT --- Package spec: pkg_pricing (packages/pkg_pricing.pks) ---
-PROMPT ==========================================================
-
--- ============================================================================
--- pkg_pricing.pks
--- TASK-014: server-side calculation of service price, return shipping fee
--- and order total, and the only place that snapshots those amounts into
--- ORDERS.
---
--- PRD 5.4 acceptance criteria: "no page ever takes a price from a page
--- item" -- every price a customer or admin sees is computed here, from
--- PRICE_TIER/APP_SETTING, never trusted from client-submitted input.
--- ============================================================================
-CREATE OR REPLACE PACKAGE pkg_pricing AUTHID DEFINER AS
-
-    -- ------------------------------------------------------------------------
-    -- get_service_price
-    -- The current price for p_service_id, read through
-    -- SERVICE.PRICE_TIER -> PRICE_TIER.AMOUNT (never a live join is cached
-    -- or trusted from a page item -- callers always call this function).
-    -- Raises -20070 if p_service_id does not exist.
-    -- ------------------------------------------------------------------------
-    FUNCTION get_service_price(p_service_id IN NUMBER) RETURN NUMBER;
-
-    -- ------------------------------------------------------------------------
-    -- get_return_fee
-    -- The current flat return-shipping fee, read from
-    -- APP_SETTING('RETURN_SHIPPING_FEE') (PRD 4.5/5.4: admin-editable,
-    -- $20-30 range -- range is an admin convention, not enforced here).
-    -- Raises -20071 if the setting row is missing or not a valid number.
-    -- ------------------------------------------------------------------------
-    FUNCTION get_return_fee RETURN NUMBER;
-
-    -- ------------------------------------------------------------------------
-    -- calc_total
-    -- get_service_price(p_service_id) + get_return_fee. Convenience for
-    -- anywhere that needs the total without snapshotting it (e.g. an APEX
-    -- page displaying "Estimated total" before submission).
-    -- ------------------------------------------------------------------------
-    FUNCTION calc_total(p_service_id IN NUMBER) RETURN NUMBER;
-
-    -- ------------------------------------------------------------------------
-    -- price_order
-    -- Computes get_service_price(p_service_id) and get_return_fee, and
-    -- snapshots ORDERS.SERVICE_PRICE / RETURN_SHIPPING_FEE / TOTAL_AMOUNT
-    -- for p_order_id in one UPDATE. This is the ONLY procedure in the
-    -- schema that is allowed to write those three columns (PRD 5.4
-    -- acceptance criteria: "prices are snapshotted into ORDERS only
-    -- through this package") -- pkg_order.submit_order (TASK-015) and
-    -- pkg_review.confirm_compatibility (TASK-040) call this rather than
-    -- ever UPDATE-ing those columns themselves.
-    --
-    -- Snapshotted values are frozen at call time (PRD 5.4: a later edit to
-    -- PRICE_TIER.AMOUNT or APP_SETTING must never retroactively change an
-    -- already-priced order) -- calling this again re-prices the order at
-    -- today's rates, which is intentional only for the admin-driven
-    -- re-price case (TASK-040); ordinary flows call it exactly once.
-    --
-    -- Raises -20070/-20071 (see above) if the price inputs can't be
-    -- resolved, or -20072 if p_order_id does not exist.
-    -- ------------------------------------------------------------------------
-    PROCEDURE price_order(
-        p_order_id   IN NUMBER,
-        p_service_id IN NUMBER
-    );
-
-END pkg_pricing;
 /
 
 
@@ -1931,140 +2719,6 @@ CREATE OR REPLACE PACKAGE BODY pkg_pricing AS
     END price_order;
 
 END pkg_pricing;
-/
-
-
-PROMPT ==========================================================
-PROMPT --- Package spec: pkg_order (packages/pkg_order.pks) ---
-PROMPT ==========================================================
-
--- ============================================================================
--- pkg_order.pks
--- TASK-015: atomic order creation for both submission paths.
--- TASK-028: added the exactly-once ORDER_SUBMITTED/ADMIN_NEW_ORDER
--- notification dispatch (see submit_order's own comment below and
--- pkg_order.pkb's header for the commit-timing trade-off this involved).
---
--- The single entry point the wizard's final "submit" step (f92606 Page 15,
--- TASK-022) calls. Everything a submission produces -- the ORDERS row, its
--- photos, its dynamic-question answers and its first ORDER_STATUS_HISTORY
--- row -- is written here, in one PL/SQL call, so a caller that does not
--- commit until submit_order returns gets all-or-nothing behavior for free
--- (see pkg_order.pkb's header comment for how that atomicity is actually
--- achieved).
---
--- submit_order never trusts the client on the one question that matters
--- most -- "is this Part Number supported" -- it always re-runs
--- pkg_compat.find_match itself (PRD 4.2: "the system never silently
--- guesses"), even though the wizard already showed the customer a match/
--- no-match result on an earlier page.
--- ============================================================================
-CREATE OR REPLACE PACKAGE pkg_order AUTHID DEFINER AS
-
-    -- ------------------------------------------------------------------------
-    -- Dynamic-question answers to save. Associative array (not a SQL-level
-    -- collection type) because the only caller is PL/SQL -- an APEX page
-    -- process building it from APEX_APPLICATION.g_f01/g_f02-style page
-    -- items or from a collection -- never a SQL query.
-    -- ------------------------------------------------------------------------
-    -- Populate densely from index 1 (p_answers(p_answers.COUNT + 1) := ...)
-    -- -- submit_order iterates 1 .. p_answers.COUNT, a sparse array would
-    -- silently skip rows.
-    TYPE t_answer_input_row IS RECORD (
-        question_code  order_answer.question_code%TYPE,
-        answer_value   order_answer.answer_value%TYPE
-    );
-    TYPE t_answer_input_tab IS TABLE OF t_answer_input_row INDEX BY PLS_INTEGER;
-
-    -- ------------------------------------------------------------------------
-    -- Photos to store. p_temp_file_name is a name from
-    -- APEX_APPLICATION_TEMP_FILES (the wizard's File Upload items,
-    -- TASK-017); p_photo_type is STICKER/DONOR/ORIGINAL
-    -- (ck_order_photo_type, TASK-006).
-    -- ------------------------------------------------------------------------
-    -- Same dense-from-1 convention as t_answer_input_tab above.
-    TYPE t_photo_input_row IS RECORD (
-        photo_type      order_photo.photo_type%TYPE,
-        temp_file_name  VARCHAR2(400)
-    );
-    TYPE t_photo_input_tab IS TABLE OF t_photo_input_row INDEX BY PLS_INTEGER;
-
-    -- ------------------------------------------------------------------------
-    -- submit_order
-    --
-    -- p_service_id: the service the customer selected. Only meaningful, and
-    -- only honored, on the matched path (see below) -- ignored (stored as
-    -- NULL) when the server's own compatibility check finds no match,
-    -- regardless of what the caller passes.
-    --
-    -- p_answers / p_photos: see the two collection types above. Either may
-    -- be empty (an associative array with COUNT = 0) -- see the body's
-    -- header comment for which case that's expected in.
-    --
-    -- p_idempotency_key: generated client-side when the review/submit page
-    -- loads (TASK-022). A second call with a key already on an ORDERS row
-    -- returns that existing order's ORDER_ID/TRACKING_TOKEN unchanged and
-    -- does no further work of its own -- no duplicate order, photos,
-    -- answers or history row. It still (harmlessly) re-runs the TASK-028
-    -- notification dispatch below, since that dispatch is itself
-    -- exactly-once (via pkg_notify.send_once) regardless of how many times
-    -- submit_order is called for the same order -- see the TASK-028 note.
-    --
-    -- Server-side flow, decided entirely inside this procedure (PRD 4.2 --
-    -- never trust the client's match/no-match flag):
-    --   1. pkg_compat.find_match(p_vehicle_id, p_category_id, p_part_number)
-    --      decides the path.
-    --   2. Matched (a compatibility entry with confirmed services exists):
-    --      p_service_id is required and must be one of that entry's
-    --      confirmed services (pkg_compat.get_services) -- raises -20080/
-    --      -20081 otherwise. ORDERS is created with SERVICE_ID/
-    --      MATCHED_ENTRY_ID set, then pkg_pricing.price_order snapshots
-    --      SERVICE_PRICE/RETURN_SHIPPING_FEE/TOTAL_AMOUNT and
-    --      pkg_order_status.change_status moves STATUS from Pending Review
-    --      (the row's initial value) to Awaiting Payment.
-    --   3. Not matched: ORDERS is created with SERVICE_ID/MATCHED_ENTRY_ID/
-    --      every price column NULL and STATUS left at Pending Review --
-    --      pkg_review.confirm_compatibility (TASK-040) is what later sets
-    --      those once an admin confirms a service by hand.
-    --
-    -- Every INSERT (ORDERS, ORDER_PHOTO via pkg_security.store_order_photo,
-    -- ORDER_ANSWER, the first ORDER_STATUS_HISTORY row) plus, on the
-    -- matched path, pkg_pricing.price_order and
-    -- pkg_order_status.change_status, happens behind a single internal
-    -- SAVEPOINT -- an exception at any point rolls the whole call back to
-    -- that savepoint and re-raises, so a partial order is never left behind
-    -- even if the caller's own error handling does nothing special (see
-    -- pkg_order.pkb's header comment).
-    --
-    -- TASK-028: once that write block has completed without raising (i.e.
-    -- the order is fully and correctly built, and the only thing left is
-    -- for the caller to COMMIT), submit_order dispatches email #1
-    -- (ORDER_SUBMITTED, to the customer, worded for whichever path this
-    -- order took) and email #5 (ADMIN_NEW_ORDER, to APP_SETTING.ADMIN_EMAIL)
-    -- via pkg_notify.send_once -- see pkg_order.pkb's header comment for why
-    -- this is positioned there rather than after an actual COMMIT statement.
-    -- ------------------------------------------------------------------------
-    PROCEDURE submit_order(
-        p_vehicle_id             IN  NUMBER,
-        p_category_id            IN  NUMBER,
-        p_part_number            IN  VARCHAR2,
-        p_service_id             IN  NUMBER DEFAULT NULL,
-        p_description            IN  CLOB,
-        p_customer_name          IN  VARCHAR2,
-        p_customer_email         IN  VARCHAR2,
-        p_customer_phone         IN  VARCHAR2,
-        p_return_address_street  IN  VARCHAR2,
-        p_return_address_city    IN  VARCHAR2,
-        p_return_address_state   IN  VARCHAR2 DEFAULT 'HI',
-        p_return_address_zip     IN  VARCHAR2,
-        p_answers                IN  t_answer_input_tab,
-        p_photos                 IN  t_photo_input_tab,
-        p_idempotency_key        IN  VARCHAR2,
-        p_order_id               OUT NUMBER,
-        p_tracking_token         OUT VARCHAR2
-    );
-
-END pkg_order;
 /
 
 
@@ -2430,152 +3084,6 @@ END pkg_order;
 
 
 PROMPT ==========================================================
-PROMPT --- Package spec: pkg_notify (packages/pkg_notify.pks) ---
-PROMPT ==========================================================
-
--- ============================================================================
--- pkg_notify.pks
--- TASK-027: transactional-email infrastructure (PRD section 9's 5 triggers).
---
--- Manual prerequisites (none of this is possible from plain SQL, which is
--- exactly why this task's own acceptance criteria list them separately from
--- the PL/SQL deliverable):
---   1. SMTP relay (OCI Email Delivery, SendGrid, or Mailgun) configured at
---      instance or workspace level (App Builder -> Workspace Utilities, or
---      Instance Administration for an instance-level relay). This session
---      has no live App Builder access, so it cannot be done here -- see
---      pkg_notify.pkb's header for the same note repeated where it matters
---      operationally.
---   2. The sender address in APP_SETTING.MAIL_FROM approved with that SMTP
---      provider (Approved Sender, or SPF/DKIM records on the sending
---      domain) -- otherwise every send() call below will queue successfully
---      but never actually deliver.
---   3. Five Email Templates created in f94517 Shared Components -> Email
---      Templates, each with its Static ID set EXACTLY to one of the
---      EMAIL_LOG.EMAIL_TYPE values already fixed by CK_EMAIL_LOG_TYPE
---      (database/ddl/040_constraints.sql):
---        ORDER_SUBMITTED, PAYMENT_LINK, MODULE_RECEIVED, SHIPPED_BACK,
---        ADMIN_NEW_ORDER
---      pkg_notify.send passes p_email_type straight through as
---      APEX_WEB_SERVICE... no -- as APEX_MAIL.SEND_TEMPLATED_EMAIL's
---      p_static_id, so the Static ID must match one of those five strings
---      exactly (case-sensitive). This is App Builder-only work (per this
---      project's "never hand-edit apex/f*.sql" rule) and needs a live
---      session -- see TASK-028/029/031 for what each template's own subject/
---      body and #PLACEHOLDER# markup should say.
---
--- Every template can rely on five placeholders pkg_notify.default_placeholders
--- always supplies: #ORDER_ID#, #CUSTOMER_NAME#, #TRACKING_TOKEN#,
--- #TRACKING_URL# (the public f92606 Page 30 tracking link), #ORDER_STATUS#.
--- The caller of send() (TASK-028/029/031, one per trigger) supplies whatever
--- else that specific template needs (e.g. #PAYMENT_URL# for PAYMENT_LINK,
--- #RETURN_TRACKING_NO# for SHIPPED_BACK) via p_extra_placeholders, a JSON
--- object CLOB merged on top of the defaults (JSON_MERGEPATCH -- its own keys
--- win on conflict).
--- ============================================================================
-CREATE OR REPLACE PACKAGE pkg_notify AUTHID DEFINER AS
-
-    -- ------------------------------------------------------------------------
-    -- default_placeholders
-    -- Builds the JSON object of the five placeholders every template can
-    -- rely on (see header) for p_order_id, as a CLOB ready to pass to
-    -- send()'s p_extra_placeholders (or to JSON_MERGEPATCH with a caller's
-    -- own extra fields before calling send -- send() does this same merge
-    -- internally, so most callers never need to call this directly; it is
-    -- exposed for previewing/testing what a template would receive).
-    -- Raises -20090 if p_order_id does not exist.
-    -- ------------------------------------------------------------------------
-    FUNCTION default_placeholders(p_order_id IN NUMBER) RETURN CLOB;
-
-    -- ------------------------------------------------------------------------
-    -- send
-    -- Sends one of the 5 transactional emails for p_order_id via
-    -- APEX_MAIL.SEND_TEMPLATED_EMAIL against the Email Template whose
-    -- Static ID equals p_email_type, and writes exactly one EMAIL_LOG row
-    -- (SUCCESS or FAILED) regardless of outcome.
-    --
-    -- p_extra_placeholders: an optional JSON object CLOB (e.g.
-    -- '{"PAYMENT_URL":"https://...","AMOUNT":"245.00"}') merged over
-    -- default_placeholders(p_order_id) -- its keys win on conflict. NULL is
-    -- fine for a template that only needs the five defaults.
-    --
-    -- p_recipient_override: NULL sends to ORDERS.CUSTOMER_EMAIL, except for
-    -- ADMIN_NEW_ORDER which defaults to APP_SETTING.ADMIN_EMAIL. Pass a
-    -- value here to send somewhere else instead (mainly for testing).
-    --
-    -- Deliberately never raises for a mail/template/SMTP failure -- only
-    -- for a programming error (unknown p_order_id: -20090, unknown
-    -- p_email_type: -20095). Any failure from APEX_MAIL itself is caught,
-    -- written to EMAIL_LOG as FAILED with the error text, and swallowed, so
-    -- the business transaction that triggered the email (order submission,
-    -- a status change, ...) is never rolled back by an email delivery
-    -- problem -- this is this task's own acceptance criterion, not a
-    -- shortcut. The EMAIL_LOG write itself is autonomous (survives even if
-    -- the caller's own transaction later rolls back for an unrelated
-    -- reason), since an email that was actually queued/sent is an
-    -- irreversible side effect that the log must keep recording regardless.
-    --
-    -- Does NOT itself check "already sent" / enforce exactly-once -- that
-    -- guarantee is send_once's job (below). send() is deliberately just
-    -- "send this one, right now, and log it"; most callers should use
-    -- send_once instead unless they specifically want an unconditional
-    -- (re)send.
-    -- ------------------------------------------------------------------------
-    PROCEDURE send(
-        p_order_id           IN NUMBER,
-        p_email_type         IN VARCHAR2,
-        p_extra_placeholders IN CLOB DEFAULT NULL,
-        p_recipient_override IN VARCHAR2 DEFAULT NULL
-    );
-
-    -- ------------------------------------------------------------------------
-    -- already_sent
-    -- TRUE if EMAIL_LOG already has a row for this (p_order_id,
-    -- p_email_type) pair, regardless of whether that attempt's RESULT was
-    -- SUCCESS or FAILED -- "exactly once" here means "attempted once", not
-    -- "delivered once": a FAILED row still represents a real APEX_MAIL call
-    -- that was made, and silently retrying it on every subsequent call
-    -- (e.g. every idempotent pkg_order.submit_order replay) would defeat
-    -- the "once" guarantee just as surely as sending twice would. A caller
-    -- that specifically wants to retry a FAILED send does so explicitly via
-    -- send(), not send_once().
-    -- ------------------------------------------------------------------------
-    FUNCTION already_sent(p_order_id IN NUMBER, p_email_type IN VARCHAR2) RETURN BOOLEAN;
-
-    -- ------------------------------------------------------------------------
-    -- send_once
-    -- send(), guarded by already_sent -- a no-op if EMAIL_LOG already has a
-    -- row for this (p_order_id, p_email_type). This is what every trigger
-    -- point (TASK-028/029/031) should call instead of send() directly, so
-    -- "each email is sent exactly once per order" (each of those tasks' own
-    -- acceptance criteria) holds automatically even when the caller itself
-    -- might run more than once for the same order -- e.g.
-    -- pkg_order.submit_order's idempotent-replay branch, or an admin
-    -- retrying a status change.
-    -- ------------------------------------------------------------------------
-    PROCEDURE send_once(
-        p_order_id           IN NUMBER,
-        p_email_type         IN VARCHAR2,
-        p_extra_placeholders IN CLOB DEFAULT NULL,
-        p_recipient_override IN VARCHAR2 DEFAULT NULL
-    );
-
-    -- ------------------------------------------------------------------------
-    -- admin_order_url
-    -- Builds the f94517 (admin) Page 11 order-detail link for p_order_id --
-    -- e.g. for the ADMIN_NEW_ORDER email's #ADMIN_ORDER_URL# placeholder
-    -- (TASK-028). A sibling to default_placeholders' own #TRACKING_URL#
-    -- construction, just pointed at the admin app instead of the public
-    -- one -- kept here, rather than duplicated in every admin-facing
-    -- caller, since this package already owns APP_BASE_URL/app-link logic.
-    -- ------------------------------------------------------------------------
-    FUNCTION admin_order_url(p_order_id IN NUMBER) RETURN VARCHAR2;
-
-END pkg_notify;
-/
-
-
-PROMPT ==========================================================
 PROMPT --- Package body: pkg_notify (packages/pkg_notify.pkb) ---
 PROMPT ==========================================================
 
@@ -2585,16 +3093,18 @@ PROMPT ==========================================================
 -- See pkg_notify.pks for the public contract and the required manual SMTP
 -- relay / Email Template setup.
 --
--- Assumption flagged for live verification: this targets
--- APEX_MAIL.SEND_TEMPLATED_EMAIL(p_static_id, p_placeholders, p_to, p_from,
--- p_cc, p_bcc, p_replace_empty_placeholders) RETURN NUMBER, the Email
--- Templates API added alongside Shared Components -> Email Templates
--- (APEX 22.2+; this workspace runs 26.1.3, so it should be present) -- not
--- yet confirmed against the live instance in this session. Likewise
--- JSON_MERGEPATCH (used below to merge extra placeholders over the
--- defaults) is a native SQL function available since Oracle 21c; the
--- apex.oracle.com Autonomous DB backing this workspace should have it, but
--- this too is unverified without a live connection.
+-- DEVIATION from the original design (live-verified 2026-09-24):
+-- APEX_MAIL.SEND_TEMPLATED_EMAIL does not exist (PLS-00302, component must
+-- be declared) -- there is no such procedure/function in APEX_MAIL. The
+-- real template-email API, added in APEX 23.1, is an overload of
+-- APEX_MAIL.SEND itself: p_template_static_id plus two PARALLEL
+-- apex_t_varchar2 arrays (p_placeholder_names / p_placeholder_values), not
+-- a single JSON blob. send() below still builds/merges placeholders as
+-- JSON internally (JSON_MERGEPATCH, confirmed available) since that keeps
+-- the public p_extra_placeholders contract callers (pkg_order, pkg_order_
+-- status) already use unchanged, then converts the merged JSON object into
+-- the two parallel arrays via JSON_OBJECT_T/JSON_KEY_LIST (native PL/SQL
+-- JSON types, not privilege-gated) right before the APEX_MAIL.SEND call.
 -- ============================================================================
 CREATE OR REPLACE PACKAGE BODY pkg_notify AS
 
@@ -2752,12 +3262,30 @@ CREATE OR REPLACE PACKAGE BODY pkg_notify AS
         END IF;
 
         BEGIN
-            l_mail_id := APEX_MAIL.SEND_TEMPLATED_EMAIL(
-                p_static_id    => p_email_type,
-                p_placeholders => l_placeholders,
-                p_to           => l_recipient,
-                p_from         => l_from
-            );
+            -- Convert the merged JSON placeholders object into the parallel
+            -- name/value arrays APEX_MAIL.SEND's template overload actually
+            -- takes (see this file's header comment).
+            DECLARE
+                l_obj    JSON_OBJECT_T := JSON_OBJECT_T.parse(l_placeholders);
+                l_keys   JSON_KEY_LIST := l_obj.get_keys;
+                l_names  apex_t_varchar2 := apex_t_varchar2();
+                l_values apex_t_varchar2 := apex_t_varchar2();
+            BEGIN
+                FOR i IN 1 .. l_keys.COUNT LOOP
+                    l_names.EXTEND;
+                    l_values.EXTEND;
+                    l_names(l_names.COUNT)   := l_keys(i);
+                    l_values(l_values.COUNT) := l_obj.get_String(l_keys(i));
+                END LOOP;
+
+                l_mail_id := APEX_MAIL.SEND(
+                    p_template_static_id => p_email_type,
+                    p_placeholder_names  => l_names,
+                    p_placeholder_values => l_values,
+                    p_to                 => l_recipient,
+                    p_from               => l_from
+                );
+            END;
 
             log_email(p_order_id, p_email_type, l_recipient, 'SUCCESS');
         EXCEPTION
@@ -2789,191 +3317,6 @@ CREATE OR REPLACE PACKAGE BODY pkg_notify AS
     END send_once;
 
 END pkg_notify;
-/
-
-
-PROMPT ==========================================================
-PROMPT --- Package spec: pkg_stripe (packages/pkg_stripe.pks) ---
-PROMPT ==========================================================
-
--- ============================================================================
--- pkg_stripe.pks
--- TASK-030: create a Stripe Payment Link for an order and read it back.
--- TASK-031: create_payment_link now also refuses any order not currently in
--- Awaiting Payment status (see its own comment below) -- no other public
--- signature changed by this task; the payment-gate wiring itself (calling
--- this from pkg_order_status on the transition, and email #2) lives in
--- pkg_order_status.pkb.
--- TASK-032/033: added handle_event -- the single entry point the
--- database/ords/stripe_webhook.sql ORDS module calls for every inbound
--- Stripe webhook delivery. See handle_event's own comment below for the
--- signature-verification / idempotency design (TASK-033) and the event
--- processing itself (TASK-032).
---
--- TASK-033 manual prerequisite, same shape as TASK-030's Web Credential
--- above but for a different reason: Stripe's webhook signing secret
--- (whsec_...) must be usable from PL/SQL to compute an HMAC ourselves (see
--- handle_event), and APEX's Web Credentials are write-only from PL/SQL --
--- APEX_WEB_SERVICE can attach one to an OUTBOUND request via
--- p_credential_static_id, but there is no API to read a Web Credential's
--- secret back out for a computation like this. So, per this task's own
--- acceptance criteria ("Web Credential or protected APP_SETTING"), the
--- webhook secret is instead stored as APP_SETTING.STRIPE_WEBHOOK_SECRET.
--- The row seeded by database/seed/010_reference_data.sql is a PLACEHOLDER
--- value ('whsec_REPLACE_ME') -- an admin must overwrite it with the real
--- signing secret from the Stripe Dashboard (Developers -> Webhooks -> the
--- registered endpoint -> Signing secret) directly in the live table once
--- the ORDS endpoint below is registered and its public URL is known to
--- give Stripe. The real secret is never committed to this repository.
---
--- Manual prerequisite (cannot be done from SQL -- this is exactly why PRD
--- 10 / this task's acceptance criteria require it to live outside code and
--- git in the first place): before this package can be called, a Web
--- Credential must exist in this workspace's Shared Components -> Web
--- Credentials with:
---   Static ID:      STRIPE_SECRET_KEY   (must match c_credential_static_id
---                                        in pkg_stripe.pkb exactly)
---   Auth Type:      HTTP Basic Authentication
---   Username:       the Stripe secret key (sk_test_... in test mode,
---                    sk_live_... in production -- Stripe's own convention
---                    is "API key as the Basic-Auth username, password
---                    blank")
---   Password:       left blank
--- The key itself is never stored in this repository -- pkg_stripe only
--- ever references it by STATIC ID via APEX_WEB_SERVICE's
--- p_credential_static_id, which resolves it server-side at request time.
--- ============================================================================
-CREATE OR REPLACE PACKAGE pkg_stripe AUTHID DEFINER AS
-
-    -- ------------------------------------------------------------------------
-    -- create_payment_link
-    -- Creates a Stripe Payment Link (POST /v1/payment_links) for
-    -- p_order_id with two line items -- the order's confirmed service (at
-    -- its snapshotted ORDERS.SERVICE_PRICE) and Return Shipping (at
-    -- ORDERS.RETURN_SHIPPING_FEE) -- and metadata.order_id set to
-    -- p_order_id (so the Stripe webhook handler, TASK-032, can resolve the
-    -- order from the event without any other lookup). Stores the returned
-    -- link id on ORDERS.STRIPE_PAYMENT_LINK_ID and returns the link's
-    -- checkout URL (needed once, immediately, for email #2 -- TASK-031 --
-    -- and not persisted anywhere else, since Stripe can always be asked
-    -- for it again by id).
-    --
-    -- Requires the order to already be priced (ORDERS.SERVICE_PRICE and
-    -- RETURN_SHIPPING_FEE both set -- i.e. pkg_pricing.price_order has
-    -- already run for it) and to have a SERVICE_ID -- raises -20090/-20091
-    -- otherwise.
-    --
-    -- TASK-031: also requires ORDERS.STATUS to currently be 'Awaiting
-    -- Payment' -- raises -20096 otherwise. This is this task's own
-    -- acceptance criteria ("pkg_stripe.create_payment_link refuses an
-    -- order in any other status"), checked here rather than only relying
-    -- on pkg_order_status being this function's sole real-world caller, so
-    -- the guarantee holds for a direct call too (e.g. from SQL Workshop, or
-    -- a future admin action that calls this package without going through
-    -- change_status). Checked before the idempotent branch below, so even
-    -- a REPEATED call for an order that has since moved on (e.g. to
-    -- Payment Received after the customer already paid) is refused rather
-    -- than quietly re-returning the old link's URL.
-    --
-    -- Idempotent within Awaiting Payment: if ORDERS.STRIPE_PAYMENT_LINK_ID
-    -- is already set for this order, no new link is created -- the
-    -- existing link's current URL is re-fetched from Stripe and returned
-    -- instead (TASK-031's "a repeated call does not create a second link"
-    -- requirement holds even called directly, not only through the caller
-    -- pkg_order_status.change_status uses).
-    --
-    -- On any Stripe API failure (network error, non-2xx response, or a 2xx
-    -- response missing id/url), the failure is written to APP_ERROR_LOG
-    -- (in its own autonomous transaction, so the log entry survives even
-    -- if the caller's transaction is rolled back after the exception this
-    -- raises) and re-raised as -20092/-20093 with a readable message.
-    -- ------------------------------------------------------------------------
-    FUNCTION create_payment_link(p_order_id IN NUMBER) RETURN VARCHAR2;
-
-    -- ------------------------------------------------------------------------
-    -- get_payment_link_status
-    -- Reads back the Payment Link already created for p_order_id (GET
-    -- /v1/payment_links/{id}) and returns 'ACTIVE' or 'INACTIVE' based on
-    -- Stripe's own "active" flag on the Payment Link object -- this is
-    -- whether the link itself is still usable, NOT whether the order has
-    -- been paid (payment completion arrives via the webhook, TASK-032/033,
-    -- not by polling this). Mainly a verification/diagnostic entry point:
-    -- proving the create -> read round-trip works end-to-end against
-    -- Stripe test mode is this task's own acceptance criterion.
-    --
-    -- Raises -20090 for an unknown ORDER_ID, -20094 if the order has no
-    -- payment link yet, or -20092 on a Stripe API failure (see
-    -- create_payment_link).
-    -- ------------------------------------------------------------------------
-    FUNCTION get_payment_link_status(p_order_id IN NUMBER) RETURN VARCHAR2;
-
-    -- ------------------------------------------------------------------------
-    -- handle_event
-    -- TASK-032/033. Called by database/ords/stripe_webhook.sql's POST
-    -- handler for every Stripe webhook delivery, with the raw request body
-    -- (p_payload, exactly as Stripe sent it -- signature verification needs
-    -- the UNMODIFIED bytes, so the ORDS module must not re-serialize or
-    -- reformat it) and the raw Stripe-Signature request header
-    -- (p_signature_header). Never raises -- every outcome, including a
-    -- malformed request, is reported back through p_status_code/
-    -- p_response_body so the ORDS handler can set the HTTP response
-    -- without its own exception handling.
-    --
-    -- TASK-033 (checked first, before ANY database write):
-    --   1. p_signature_header must be present and parse into a t= (unix
-    --      timestamp) and at least one v1= (hex HMAC-SHA256 signature)
-    --      field.
-    --   2. Its HMAC-SHA256 (DBMS_CRYPTO.MAC, key = APP_SETTING.
-    --      STRIPE_WEBHOOK_SECRET) over "<t>.<raw body>" must match the v1=
-    --      value.
-    --   3. t= must be within c_timestamp_tolerance_seconds (see pkb) of the
-    --      current time, so a captured request can't be replayed
-    --      indefinitely.
-    --   A missing header, an unparseable header, a mismatched signature, an
-    --   unconfigured webhook secret, or a stale timestamp all fail
-    --   verification the same way: p_status_code := 400, nothing is written
-    --   to the database (TASK-033 acceptance criteria: "returns 400 and
-    --   changes nothing").
-    --
-    -- TASK-032/033 (once signature verification passes):
-    --   4. The event's own id (JSON $.id) is inserted into STRIPE_EVENT,
-    --      whose UNIQUE (event_id) constraint makes a retried/duplicate
-    --      Stripe delivery a no-op -- caught as DUP_VAL_ON_INDEX and
-    --      answered with a plain 200 (Stripe stops retrying), no
-    --      reprocessing.
-    --   5. Only $.type = 'checkout.session.completed' (how a paid Stripe
-    --      Payment Link surfaces to a webhook) is acted on -- every other
-    --      event type is still recorded in STRIPE_EVENT (for audit) but
-    --      otherwise ignored, answered 200 (TASK-032 acceptance criteria:
-    --      "ignores unknown event types").
-    --   6. For that event type, the order is resolved from
-    --      $.data.object.metadata.order_id (the metadata
-    --      create_payment_link, TASK-030, put on the Payment Link and that
-    --      Stripe carries onto the Checkout Session it creates), ORDERS.
-    --      STRIPE_PAYMENT_STATUS is updated from $.data.object.
-    --      payment_status, and pkg_order_status.change_status moves the
-    --      order to 'Payment Received' with p_changed_by => 'SYSTEM' (this
-    --      task's acceptance criteria).
-    --   7. Any failure resolving the order or advancing its status
-    --      (unresolvable order_id, an order already past Payment Received,
-    --      ...) is logged to APP_ERROR_LOG and swallowed -- the response is
-    --      still 200, since the event itself was validly received and
-    --      recorded (STRIPE_EVENT.PROCESSED stays 'N'); the alternative
-    --      (a non-2xx response) would just make Stripe retry the same
-    --      delivery forever for a problem retrying can't fix.
-    --
-    -- Responds quickly by design (TASK-032 acceptance criteria): every step
-    -- above is a handful of single-row lookups/updates and one CPU-bound
-    -- HMAC computation, no external calls.
-    -- ------------------------------------------------------------------------
-    PROCEDURE handle_event(
-        p_payload           IN  CLOB,
-        p_signature_header  IN  VARCHAR2,
-        p_status_code        OUT PLS_INTEGER,
-        p_response_body        OUT VARCHAR2
-    );
-
-END pkg_stripe;
 /
 
 
@@ -3140,12 +3483,19 @@ CREATE OR REPLACE PACKAGE BODY pkg_stripe AS
             || '&line_items[1][quantity]=1'
             || '&metadata[order_id]=' || TO_CHAR(p_order_id);
 
+        -- APEX_WEB_SERVICE.MAKE_REST_REQUEST has no p_content_type parameter
+        -- (live-confirmed 2026-09-24: PLS-00306, wrong number/types of
+        -- arguments) -- the documented way to set a request header is via
+        -- the APEX_WEB_SERVICE.g_request_headers array before the call.
+        APEX_WEB_SERVICE.g_request_headers.DELETE;
+        APEX_WEB_SERVICE.g_request_headers(1).name  := 'Content-Type';
+        APEX_WEB_SERVICE.g_request_headers(1).value := 'application/x-www-form-urlencoded';
+
         l_response := APEX_WEB_SERVICE.MAKE_REST_REQUEST(
             p_url                  => c_api_base || '/payment_links',
             p_http_method          => 'POST',
             p_credential_static_id => c_credential_static_id,
-            p_body                 => l_body,
-            p_content_type         => 'application/x-www-form-urlencoded'
+            p_body                 => l_body
         );
         l_status_code := APEX_WEB_SERVICE.g_status_code;
 
@@ -3224,6 +3574,51 @@ CREATE OR REPLACE PACKAGE BODY pkg_stripe AS
     END get_app_setting;
 
     ----------------------------------------------------------------------------
+    -- hmac_sha256 (private)
+    -- Hand-built HMAC-SHA256 (RFC 2104) using only STANDARD_HASH and
+    -- UTL_RAW -- neither privilege-gated in this workspace, unlike
+    -- DBMS_CRYPTO (see verify_signature's header comment for why this
+    -- exists at all). Block size for SHA-256 is 64 bytes:
+    --   K' = K, hashed down to 32 bytes if longer than 64, then
+    --        zero-padded on the right to exactly 64 bytes if shorter
+    --   ipad = K' XOR (0x36 repeated 64 times)
+    --   opad = K' XOR (0x5c repeated 64 times)
+    --   HMAC(K, m) = SHA256( opad || SHA256( ipad || m ) )
+    ----------------------------------------------------------------------------
+    FUNCTION hmac_sha256(p_key IN RAW, p_msg IN RAW) RETURN RAW IS
+        c_block_size CONSTANT PLS_INTEGER := 64; -- SHA-256 HMAC block size, in bytes
+        l_key        RAW(64);
+        l_ipad_mask  RAW(64);
+        l_opad_mask  RAW(64);
+        l_ipad       RAW(64);
+        l_opad       RAW(64);
+        l_inner      RAW(32);
+    BEGIN
+        l_key := p_key;
+
+        IF UTL_RAW.LENGTH(l_key) > c_block_size THEN
+            l_key := STANDARD_HASH(l_key, 'SHA256'); -- down to 32 bytes
+        END IF;
+
+        IF UTL_RAW.LENGTH(l_key) < c_block_size THEN
+            l_key := UTL_RAW.CONCAT(
+                l_key,
+                UTL_RAW.COPIES(HEXTORAW('00'), c_block_size - UTL_RAW.LENGTH(l_key))
+            );
+        END IF;
+
+        l_ipad_mask := UTL_RAW.COPIES(HEXTORAW('36'), c_block_size);
+        l_opad_mask := UTL_RAW.COPIES(HEXTORAW('5C'), c_block_size);
+
+        l_ipad := UTL_RAW.BIT_XOR(l_key, l_ipad_mask);
+        l_opad := UTL_RAW.BIT_XOR(l_key, l_opad_mask);
+
+        l_inner := STANDARD_HASH(UTL_RAW.CONCAT(l_ipad, p_msg), 'SHA256');
+
+        RETURN STANDARD_HASH(UTL_RAW.CONCAT(l_opad, l_inner), 'SHA256');
+    END hmac_sha256;
+
+    ----------------------------------------------------------------------------
     -- verify_signature
     -- TASK-033. Verifies a Stripe-Signature header (format
     -- "t=<unix ts>,v1=<hex hmac>[,v0=...]") against p_payload, using
@@ -3293,13 +3688,21 @@ CREATE OR REPLACE PACKAGE BODY pkg_stripe AS
 
         l_signed_payload := l_timestamp_str || '.' || DBMS_LOB.SUBSTR(p_payload, 32000, 1);
 
-        l_computed_sig := LOWER(RAWTOHEX(
-            DBMS_CRYPTO.MAC(
-                src => UTL_I18N.STRING_TO_RAW(l_signed_payload, 'AL32UTF8'),
-                typ => DBMS_CRYPTO.HMAC_SH256,
-                key => UTL_I18N.STRING_TO_RAW(l_webhook_secret, 'AL32UTF8')
-            )
-        ));
+        -- DEVIATION from the original design (live-verified 2026-09-24):
+        -- this workspace's schema has no EXECUTE privilege on DBMS_CRYPTO
+        -- (see pkg_security.pkb's generate_tracking_token header comment
+        -- for the same live-confirmed restriction), so DBMS_CRYPTO.MAC is
+        -- replaced with a hand-built HMAC-SHA256 using only STANDARD_HASH
+        -- (a native SQL function, SHA-256 digest = 32 bytes = the RFC 2104
+        -- HMAC block size for this hash) and UTL_RAW (bitwise XOR/concat,
+        -- not privilege-gated) -- the standard construction:
+        --   HMAC(K, m) = H( (K' XOR opad) || H( (K' XOR ipad) || m ) )
+        -- with K' = K, right-padded with zero bytes to the 64-byte SHA-256
+        -- block size (or hashed down to 32 bytes first if longer than 64).
+        l_computed_sig := LOWER(RAWTOHEX(hmac_sha256(
+            p_key => UTL_I18N.STRING_TO_RAW(l_webhook_secret, 'AL32UTF8'),
+            p_msg => UTL_I18N.STRING_TO_RAW(l_signed_payload, 'AL32UTF8')
+        )));
 
         RETURN l_computed_sig = LOWER(l_provided_sig);
     EXCEPTION
@@ -3430,115 +3833,6 @@ CREATE OR REPLACE PACKAGE BODY pkg_stripe AS
     END handle_event;
 
 END pkg_stripe;
-/
-
-
-PROMPT ==========================================================
-PROMPT --- Package spec: pkg_review (packages/pkg_review.pks) ---
-PROMPT ==========================================================
-
--- ============================================================================
--- pkg_review.pks
--- TASK-040: admin confirmation of compatibility for a Pending Review order
--- (PRD 4.2/5.2: "an unmatched Part Number is routed to a manual review
--- queue before payment unlocks").
---
--- confirm_compatibility is the ONLY procedure in this schema allowed to
--- move an order out of Pending Review directly (as opposed to a matched
--- order, which pkg_order.submit_order, TASK-015, already starts at
--- Awaiting Payment). It is the admin's counterpart to pkg_compat.find_match
--- (TASK-013): where find_match only ever reads COMPATIBILITY_ENTRY/
--- COMPATIBILITY_SERVICE, this is the one place those tables are written
--- with SOURCE = 'ADMIN_CONFIRMED' -- the other provenance value, 'IMPORT',
--- is written only by pkg_import (TASK-044).
---
--- Once this runs for one order's (VEHICLE_ID, CATEGORY_ID, PART_NUMBER),
--- every later order for that same triple matches automatically via
--- pkg_compat.find_match -- no code change needed for that; it falls out of
--- find_match querying the same COMPATIBILITY_ENTRY/COMPATIBILITY_SERVICE
--- rows this procedure writes (TASK-040 acceptance criteria, verified in
--- test_pkg_review.sql by calling find_match again after confirming).
--- ============================================================================
-CREATE OR REPLACE PACKAGE pkg_review AUTHID DEFINER AS
-
-    -- ------------------------------------------------------------------------
-    -- The set of SERVICE_IDs the admin confirms as supported for this
-    -- Part Number/vehicle/category combination -- i.e. the full
-    -- COMPATIBILITY_SERVICE link set for the COMPATIBILITY_ENTRY this call
-    -- creates or updates, not just the one service this particular order
-    -- needs (p_selected_service_id, below, is that one). Associative array
-    -- (not a SQL-level collection type) because the only caller is PL/SQL --
-    -- an APEX page process building it from a multi-select item or a
-    -- collection (TASK-042's f94517 Page 21 modal) -- never a SQL query.
-    -- Populate densely from index 1, same convention as pkg_order's
-    -- t_answer_input_tab/t_photo_input_tab -- confirm_compatibility
-    -- iterates 1 .. p_service_ids.COUNT, so a sparse array would silently
-    -- skip entries.
-    -- ------------------------------------------------------------------------
-    TYPE t_service_id_tab IS TABLE OF service.service_id%TYPE INDEX BY PLS_INTEGER;
-
-    -- ------------------------------------------------------------------------
-    -- confirm_compatibility
-    -- For p_order_id (must currently be Pending Review -- raises -20101
-    -- otherwise):
-    --   1. Creates or updates the COMPATIBILITY_ENTRY for the order's
-    --      (VEHICLE_ID, CATEGORY_ID, PART_NUMBER_ENTERED) with
-    --      SOURCE = 'ADMIN_CONFIRMED' (a MERGE on the same natural key
-    --      pkg_compat.find_match looks up by, UX_COMPAT_ENTRY_LOOKUP --
-    --      if an entry already exists there, e.g. from a very recent
-    --      import that ran after this order was submitted, its SOURCE is
-    --      upgraded to ADMIN_CONFIRMED rather than a duplicate being
-    --      created).
-    --   2. Syncs that entry's COMPATIBILITY_SERVICE links to exactly
-    --      p_service_ids -- adds any missing, removes any no longer
-    --      confirmed. Every id in p_service_ids must reference an existing
-    --      SERVICE row (raises -20104 naming the first bad id otherwise)
-    --      and the array must not be empty (raises -20102).
-    --   3. Sets ORDERS.MATCHED_ENTRY_ID to that entry and ORDERS.
-    --      SERVICE_ID to p_selected_service_id -- the one service, among
-    --      the confirmed set, this particular order is for. Must be one of
-    --      p_service_ids (raises -20103 otherwise -- an order can't be
-    --      priced for a service its own compatibility entry doesn't
-    --      confirm).
-    --   4. Snapshots prices via pkg_pricing.price_order(p_order_id,
-    --      p_selected_service_id) -- the same, only, pricing entry point
-    --      the matched-at-submission path uses (TASK-014).
-    --   5. Moves the order to Awaiting Payment via pkg_order_status.
-    --      change_status (TASK-012), which in turn creates the Stripe
-    --      Payment Link and sends email #2 (TASK-031) -- confirm_
-    --      compatibility does not duplicate any of that, it only reaches
-    --      the state that hook fires on.
-    --
-    -- All five steps run under one SAVEPOINT: any failure (including one
-    -- raised deep inside change_status/price_order) rolls back everything
-    -- this call wrote -- the COMPATIBILITY_ENTRY/COMPATIBILITY_SERVICE
-    -- changes included -- and re-raises, so a partially-confirmed
-    -- compatibility entry is never left behind by a failed call. Same
-    -- "guarantee cleanup, then re-raise" shape pkg_order.submit_order uses
-    -- for its own atomicity.
-    --
-    -- p_changed_by: passed straight through to change_status (NULL, the
-    -- default, resolves to the live APEX session's APP_USER there -- this
-    -- is always an authenticated f94517 admin action, never a SYSTEM one,
-    -- so no caller of this procedure is expected to pass an explicit
-    -- value; the parameter exists only so a test script outside an APEX
-    -- session can).
-    --
-    -- Raises -20100 for an unknown p_order_id, -20101 if it is not
-    -- currently Pending Review, -20102 for an empty p_service_ids,
-    -- -20103 if p_selected_service_id is not in p_service_ids, -20104 if
-    -- any id in p_service_ids does not exist in SERVICE, or whatever
-    -- pkg_pricing/pkg_order_status themselves raise for a problem at
-    -- steps 4-5 (both already validate their own inputs independently).
-    -- ------------------------------------------------------------------------
-    PROCEDURE confirm_compatibility(
-        p_order_id             IN NUMBER,
-        p_service_ids          IN t_service_id_tab,
-        p_selected_service_id  IN NUMBER,
-        p_changed_by           IN VARCHAR2 DEFAULT NULL
-    );
-
-END pkg_review;
 /
 
 
@@ -3731,190 +4025,6 @@ CREATE OR REPLACE PACKAGE BODY pkg_review AS
     END confirm_compatibility;
 
 END pkg_review;
-/
-
-
-PROMPT ==========================================================
-PROMPT --- Package spec: pkg_import (packages/pkg_import.pks) ---
-PROMPT ==========================================================
-
--- ============================================================================
--- pkg_import.pks
--- TASK-044: staging, validation and MERGE for bulk compatibility imports
--- (PRD's admin-side "load a spreadsheet of known-good Part Numbers"
--- workflow -- the bulk counterpart to pkg_review.confirm_compatibility,
--- TASK-040, which confirms one Part Number at a time from an order).
---
--- CSV format (documented in full in README.md's "Bulk compatibility
--- import" section -- summarized here since it drives every column/
--- validation rule below):
---   MAKE, MODEL, YEAR, CATEGORY, PART_NUMBER, SERVICE_NAMES
--- One row per (vehicle, category, part number) combination.
---   MAKE / MODEL       free text, matched/created in VEHICLE_REF.
---   YEAR               a single 4-digit model year (1980-2100, matching
---                       VEHICLE_REF.YEAR's own CK_VEHICLE_REF_YEAR) -- not
---                       a range; a Make/Model spanning several years needs
---                       one CSV row per year, same as VEHICLE_REF itself
---                       (see its own DDL comment).
---   CATEGORY           one of the 5 fixed MODULE_CATEGORY names (e.g.
---                       "ECM/PCM") -- matched case-insensitively.
---   PART_NUMBER         the Part Number this row confirms compatibility
---                       for.
---   SERVICE_NAMES        one or more SERVICE.NAME values confirmed
---                       supported for this Part Number, PIPE-separated
---                       ("Cloning|VIN Write") -- matched case-insensitively
---                       against services in the row's own CATEGORY only.
---
--- Three-step workflow, matching the staging table's STATUS lifecycle
--- (COMPAT_IMPORT_STG.STATUS: PENDING -> VALID/INVALID -> APPLIED):
---   1. start_batch   stages every row as-is (no validation yet).
---   2. validate_batch marks each PENDING row VALID or INVALID, with a
---      human-readable ERROR_TEXT for the latter -- never raises for a bad
---      row itself, only for a batch-level problem (unknown batch).
---   3. apply_batch    MERGEs every VALID row into VEHICLE_REF/
---      COMPATIBILITY_ENTRY/COMPATIBILITY_SERVICE (SOURCE = 'IMPORT'),
---      marking each APPLIED as it goes; never touches an INVALID row.
--- Splitting these into three calls (rather than one do-everything
--- procedure) is what lets TASK-045's f94517 Page 31 show a preview
--- (get_batch_rows below) between staging and committing the import to the
--- live compatibility catalog.
--- ============================================================================
-CREATE OR REPLACE PACKAGE pkg_import AUTHID DEFINER AS
-
-    -- ------------------------------------------------------------------------
-    -- One CSV data row as read by the caller (an APEX page process parsing
-    -- an uploaded file, or a test script) -- raw text in every field,
-    -- exactly as the CSV had it; start_batch stores it as-is, unvalidated.
-    -- Associative array, dense from index 1, same convention as pkg_order's
-    -- t_answer_input_tab/t_photo_input_tab and pkg_review's
-    -- t_service_id_tab -- the only caller is PL/SQL, never a SQL query.
-    -- ------------------------------------------------------------------------
-    TYPE t_row_input IS RECORD (
-        make_raw           VARCHAR2(200),
-        model_raw          VARCHAR2(200),
-        year_raw           VARCHAR2(200),
-        category_raw       VARCHAR2(200),
-        part_number_raw    VARCHAR2(200),
-        service_names_raw  VARCHAR2(4000)
-    );
-    TYPE t_row_input_tab IS TABLE OF t_row_input INDEX BY PLS_INTEGER;
-
-    -- Row/collection type for get_batch_rows, declared here (not in the
-    -- body) so SQL can consume the pipelined function via
-    -- TABLE(pkg_import.get_batch_rows(:P_BATCH_ID)) -- same pattern as
-    -- pkg_compat.get_services/pkg_order_status.get_next_statuses -- the
-    -- source TASK-045's f94517 Page 31 preview Interactive Report will use.
-    TYPE t_stg_row IS RECORD (
-        stg_id             compat_import_stg.stg_id%TYPE,
-        row_num            compat_import_stg.row_num%TYPE,
-        make_raw           compat_import_stg.make_raw%TYPE,
-        model_raw          compat_import_stg.model_raw%TYPE,
-        year_raw           compat_import_stg.year_raw%TYPE,
-        category_raw       compat_import_stg.category_raw%TYPE,
-        part_number_raw    compat_import_stg.part_number_raw%TYPE,
-        service_names_raw  compat_import_stg.service_names_raw%TYPE,
-        status             compat_import_stg.status%TYPE,
-        error_text         compat_import_stg.error_text%TYPE
-    );
-    TYPE t_stg_row_tab IS TABLE OF t_stg_row;
-
-    -- ------------------------------------------------------------------------
-    -- start_batch
-    -- Generates a new BATCH_ID (format IMPB-<YYYYMMDDHH24MISS>-<6 random
-    -- uppercase chars> -- readable and, for all practical purposes,
-    -- collision-free even for two batches started in the same second) and
-    -- stages every row of p_rows into COMPAT_IMPORT_STG with STATUS =
-    -- 'PENDING', ROW_NUM = 1, 2, 3, ... in p_rows order. Does not validate
-    -- anything -- call validate_batch next. Raises -20140 if p_rows is
-    -- empty.
-    -- ------------------------------------------------------------------------
-    FUNCTION start_batch(p_rows IN t_row_input_tab) RETURN VARCHAR2;
-
-    -- ------------------------------------------------------------------------
-    -- validate_batch
-    -- Validates every PENDING row of p_batch_id (a row already VALID/
-    -- INVALID/APPLIED from an earlier call is left untouched -- safe to
-    -- call more than once on the same batch, e.g. after fixing referenced
-    -- data). For each row, checks (collecting ALL problems found into one
-    -- semicolon-separated ERROR_TEXT, not just the first):
-    --   - MAKE_RAW / MODEL_RAW: present, and each <= 50 characters
-    --     (VEHICLE_REF.MAKE/MODEL's width).
-    --   - YEAR_RAW: a plain 4-digit number, 1980-2100 (VEHICLE_REF's own
-    --     CK_VEHICLE_REF_YEAR range).
-    --   - CATEGORY_RAW: matches an existing MODULE_CATEGORY.NAME
-    --     (case-insensitive).
-    --   - PART_NUMBER_RAW: present, and <= 100 characters
-    --     (COMPATIBILITY_ENTRY.PART_NUMBER's width).
-    --   - SERVICE_NAMES_RAW: present, splits (on '|') into at least one
-    --     non-empty name, and every name matches an existing SERVICE.NAME
-    --     *within the row's own CATEGORY_RAW* (case-insensitive) -- a
-    --     service that exists but belongs to a different category is
-    --     still an error, naming which service and which category it
-    --     actually belongs to.
-    -- A row with zero problems is marked VALID; otherwise INVALID with
-    -- ERROR_TEXT set. Never raises for a bad row -- only for a batch-level
-    -- problem: -20141 if p_batch_id does not exist (zero rows in
-    -- COMPAT_IMPORT_STG for it).
-    -- ------------------------------------------------------------------------
-    PROCEDURE validate_batch(p_batch_id IN VARCHAR2);
-
-    -- ------------------------------------------------------------------------
-    -- apply_batch
-    -- MERGEs every VALID row of p_batch_id into the live compatibility
-    -- catalog, marking each APPLIED as it succeeds:
-    --   - VEHICLE_REF: adds (MAKE_RAW, MODEL_RAW, YEAR_RAW) if missing
-    --     (MERGE on its own UQ_VEHICLE_REF natural key).
-    --   - COMPATIBILITY_ENTRY: adds (vehicle, category, PART_NUMBER_RAW)
-    --     with SOURCE = 'IMPORT' if missing. If an entry already exists,
-    --     its SOURCE is left exactly as-is -- an import NEVER downgrades
-    --     an ADMIN_CONFIRMED entry (pkg_review, TASK-040) back to IMPORT;
-    --     that asymmetry (pkg_review DOES upgrade IMPORT -> ADMIN_CONFIRMED)
-    --     is intentional: an admin's explicit per-order confirmation is a
-    --     stronger signal than a bulk file, in either direction.
-    --   - COMPATIBILITY_SERVICE: adds a link for each of this row's
-    --     confirmed services if missing -- ADDITIVE only, never removes an
-    --     existing link (unlike pkg_review.confirm_compatibility's full
-    --     replace-the-set semantics for one order's admin review; an
-    --     import is understood as "here is more confirmed data", not "here
-    --     is the complete, authoritative list", since it is normal to run
-    --     several incremental import batches over time).
-    -- Never duplicates: every write above is a MERGE keyed on the same
-    -- natural/unique keys those tables already enforce, so re-running
-    -- apply_batch (on the same batch, or a later batch with overlapping
-    -- rows) is always a no-op for data already present.
-    --
-    -- Each row is applied under its own SAVEPOINT: if one row fails
-    -- unexpectedly (e.g. a referenced SERVICE was deleted between
-    -- validate_batch and this call -- validate_batch's own checks make
-    -- every other failure mode here effectively unreachable for a row it
-    -- already marked VALID), that row's writes are rolled back, the row is
-    -- reset to INVALID with the runtime error as ERROR_TEXT, and the loop
-    -- continues -- one bad row never aborts the rest of the batch.
-    --
-    -- p_applied_count / p_skipped_count: how many rows were newly marked
-    -- APPLIED vs. left alone (already non-VALID -- INVALID, PENDING never
-    -- validated, or already APPLIED from an earlier call). Raises -20141
-    -- (same as validate_batch) if p_batch_id does not exist.
-    -- ------------------------------------------------------------------------
-    PROCEDURE apply_batch(
-        p_batch_id       IN  VARCHAR2,
-        p_applied_count  OUT PLS_INTEGER,
-        p_skipped_count  OUT PLS_INTEGER
-    );
-
-    -- ------------------------------------------------------------------------
-    -- get_batch_rows
-    -- Pipelined: every COMPAT_IMPORT_STG row for p_batch_id, ordered by
-    -- ROW_NUM -- the preview source TASK-045's f94517 Page 31 Interactive
-    -- Report will use (TABLE(pkg_import.get_batch_rows(:P_BATCH_ID))), so
-    -- an admin can see each row's status/error before committing to
-    -- apply_batch. Zero rows for an unknown p_batch_id -- never raises,
-    -- same "a report source should not itself blow up on empty data"
-    -- reasoning pkg_compat.get_services documents for itself.
-    -- ------------------------------------------------------------------------
-    FUNCTION get_batch_rows(p_batch_id IN VARCHAR2) RETURN t_stg_row_tab PIPELINED;
-
-END pkg_import;
 /
 
 
@@ -4231,10 +4341,20 @@ CREATE OR REPLACE PACKAGE BODY pkg_import AS
                     -- between validation and this call. Roll back just
                     -- this row's writes, record why, and move on to the
                     -- next row rather than aborting the whole batch.
-                    ROLLBACK TO SAVEPOINT sp_import_row;
-                    UPDATE compat_import_stg
-                       SET status = 'INVALID', error_text = SUBSTR(SQLERRM, 1, 4000)
-                     WHERE stg_id = rec.stg_id;
+                    -- SQLERRM cannot be referenced directly inside a SQL
+                    -- statement (live-confirmed 2026-09-24: ORA-00904,
+                    -- invalid identifier "SQLERRM") -- it is a PL/SQL-only
+                    -- function, so it must be captured into a local
+                    -- variable first, same as every other error-logging
+                    -- site in this schema (e.g. pkg_stripe.log_error).
+                    DECLARE
+                        l_err_text VARCHAR2(4000) := SUBSTR(SQLERRM, 1, 4000);
+                    BEGIN
+                        ROLLBACK TO SAVEPOINT sp_import_row;
+                        UPDATE compat_import_stg
+                           SET status = 'INVALID', error_text = l_err_text
+                         WHERE stg_id = rec.stg_id;
+                    END;
                     p_skipped_count := p_skipped_count + 1;
             END;
         END LOOP;
@@ -4571,6 +4691,21 @@ PROMPT ==========================================================
 -- every other package in this schema uses and does not COMMIT internally.
 -- ============================================================================
 BEGIN
+    -- Self-enable REST for this schema (live-confirmed 2026-09-24:
+    -- ORA-20012 "Schema not REST enabled" on the first run). On an
+    -- Autonomous Database / apex.oracle.com workspace, a schema owner can
+    -- enable ORDS for its own schema without any ADMIN grant -- this call
+    -- is idempotent (safe to run again on every re-install) and uses the
+    -- schema's own name as both the REST-enabled flag owner and its base
+    -- path alias, matching the module's p_base_path ('stripe/') below.
+    ORDS.ENABLE_SCHEMA(
+        p_enabled          => TRUE,
+        p_schema           => SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA'),
+        p_url_mapping_type => 'BASE_PATH',
+        p_url_mapping_pattern => LOWER(SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA')),
+        p_auto_rest_auth   => FALSE
+    );
+
     ORDS.DEFINE_MODULE(
         p_module_name    => 'stripe.webhook',
         p_base_path      => 'stripe/',

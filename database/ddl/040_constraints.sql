@@ -110,7 +110,7 @@ ALTER TABLE orders
             OR total_amount = service_price + return_shipping_fee
         );
 
-COMMENT ON CONSTRAINT ck_orders_total_matches_sum ON orders IS 'Only enforced once all three of SERVICE_PRICE/RETURN_SHIPPING_FEE/TOTAL_AMOUNT are set (matched path or a confirmed Pending Review order, both via pkg_pricing/TASK-014) -- a Pending-Review order legitimately has all three NULL before compatibility is confirmed.';
+-- NOTE (Oracle has no COMMENT ON CONSTRAINT): ck_orders_total_matches_sum ON orders IS 'Only enforced once all three of SERVICE_PRICE/RETURN_SHIPPING_FEE/TOTAL_AMOUNT are set (matched path or a confirmed Pending Review order, both via pkg_pricing/TASK-014) -- a Pending-Review order legitimately has all three NULL before compatibility is confirmed.';
 
 -- ----------------------------------------------------------------------------
 -- Format CHECK constraints on ORDERS (acceptance criteria: email + US ZIP)
@@ -123,5 +123,5 @@ ALTER TABLE orders
     ADD CONSTRAINT ck_orders_zip_format
         CHECK (REGEXP_LIKE(return_address_zip, '^[0-9]{5}(-[0-9]{4})?$'));
 
-COMMENT ON CONSTRAINT ck_orders_email_format ON orders IS 'Basic non-strict email shape check (local@domain.tld); mirrored by an APEX page-level validation on f92606 Page 14 (TASK-021) for a friendlier inline message before this constraint would ever fire.';
-COMMENT ON CONSTRAINT ck_orders_zip_format ON orders IS 'US ZIP or ZIP+4 (5 digits, optional -4 digits); mirrored by an APEX page-level validation on f92606 Page 14 (TASK-021).';
+-- NOTE (Oracle has no COMMENT ON CONSTRAINT): ck_orders_email_format ON orders IS 'Basic non-strict email shape check (local@domain.tld); mirrored by an APEX page-level validation on f92606 Page 14 (TASK-021) for a friendlier inline message before this constraint would ever fire.';
+-- NOTE (Oracle has no COMMENT ON CONSTRAINT): ck_orders_zip_format ON orders IS 'US ZIP or ZIP+4 (5 digits, optional -4 digits); mirrored by an APEX page-level validation on f92606 Page 14 (TASK-021).';

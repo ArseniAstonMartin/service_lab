@@ -63,7 +63,7 @@ CREATE OR REPLACE PACKAGE BODY pkg_compat AS
         ) LOOP
             l_row.service_id  := r.service_id;
             l_row.name        := r.name;
-            l_row.price_tier  := r.price_tier;
+            l_row.tier_code   := r.price_tier;
             l_row.tier_amount := r.tier_amount;
             PIPE ROW (l_row);
         END LOOP;

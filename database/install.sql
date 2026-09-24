@@ -49,26 +49,37 @@ PROMPT --- DDL: views ---
 PROMPT --- DDL: import staging (bulk compatibility import) ---
 @@ddl/070_import_staging.sql
 
-PROMPT --- Packages: specs + bodies ---
--- Each package below is added by its own TASK-0xx; @@ lines are appended
--- here as they land so install.sql always reflects what actually exists.
+PROMPT --- Package specs (all, before any body) ---
+-- Package bodies call across packages in a cycle-ish way (e.g.
+-- pkg_order_status.pkb calls pkg_stripe/pkg_notify; pkg_order.pkb calls
+-- pkg_notify), so bodies cannot simply be compiled in dependency order --
+-- there is no single linear order that works. PL/SQL only requires a
+-- referenced package's SPEC to already exist at body-compile time (not its
+-- body), so the fix is the standard one: compile every spec first (specs
+-- here have no cross-package references at all -- verified), then every
+-- body after, in any order, since by then every spec they might call
+-- already exists (live-confirmed 2026-09-24: the original single-pass
+-- spec+body-per-package order produced PLS-00201 "must be declared"
+-- errors for pkg_order_status.pkb, pkg_order.pkb, etc.).
 @@packages/pkg_security.pks
-@@packages/pkg_security.pkb
 @@packages/pkg_order_status.pks
-@@packages/pkg_order_status.pkb
 @@packages/pkg_compat.pks
-@@packages/pkg_compat.pkb
 @@packages/pkg_pricing.pks
-@@packages/pkg_pricing.pkb
 @@packages/pkg_order.pks
-@@packages/pkg_order.pkb
 @@packages/pkg_notify.pks
-@@packages/pkg_notify.pkb
 @@packages/pkg_stripe.pks
-@@packages/pkg_stripe.pkb
 @@packages/pkg_review.pks
-@@packages/pkg_review.pkb
 @@packages/pkg_import.pks
+
+PROMPT --- Package bodies (all, after every spec) ---
+@@packages/pkg_security.pkb
+@@packages/pkg_order_status.pkb
+@@packages/pkg_compat.pkb
+@@packages/pkg_pricing.pkb
+@@packages/pkg_order.pkb
+@@packages/pkg_notify.pkb
+@@packages/pkg_stripe.pkb
+@@packages/pkg_review.pkb
 @@packages/pkg_import.pkb
 
 PROMPT --- Seed data ---
