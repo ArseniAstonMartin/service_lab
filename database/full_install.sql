@@ -2085,13 +2085,29 @@ CREATE OR REPLACE PACKAGE BODY pkg_security AS
     -- matching c_token_bytes exactly, so the rest of this function (unique-
     -- ness retry loop, base64 encoding) is unchanged.
     -- --------------------------------------------------------------------------
+    -- --------------------------------------------------------------------------
+    -- sha256_raw (private)
+    -- STANDARD_HASH cannot be called directly as a plain PL/SQL function --
+    -- live-confirmed 2026-09-24: PLS-00201 "identifier 'STANDARD_HASH' must
+    -- be declared". Like a handful of other SQL-only built-ins, it is only
+    -- recognized inside an embedded SQL statement, so it must be invoked via
+    -- SELECT ... INTO ... FROM DUAL. This wraps that so every other
+    -- STANDARD_HASH use in this body stays a plain function call.
+    -- --------------------------------------------------------------------------
+    FUNCTION sha256_raw(p_input IN RAW) RETURN RAW IS
+        l_out RAW(32);
+    BEGIN
+        SELECT STANDARD_HASH(p_input, 'SHA256') INTO l_out FROM dual;
+        RETURN l_out;
+    END sha256_raw;
+
     FUNCTION generate_tracking_token RETURN VARCHAR2 IS
         l_raw      RAW(32);
         l_token    VARCHAR2(64);
         l_exists   PLS_INTEGER;
     BEGIN
         FOR i IN 1 .. c_max_token_attempts LOOP
-            l_raw := STANDARD_HASH(
+            l_raw := sha256_raw(
                 UTL_RAW.CONCAT(
                     SYS_GUID(),
                     SYS_GUID(),
@@ -2100,8 +2116,7 @@ CREATE OR REPLACE PACKAGE BODY pkg_security AS
                         || TO_CHAR(SYSTIMESTAMP, 'YYYYMMDDHH24MISSFF9')
                         || TO_CHAR(i)
                     )
-                ),
-                'SHA256'
+                )
             );
 
             -- Standard base64 -> URL-safe base64, no padding:
@@ -3097,14 +3112,15 @@ PROMPT ==========================================================
 -- APEX_MAIL.SEND_TEMPLATED_EMAIL does not exist (PLS-00302, component must
 -- be declared) -- there is no such procedure/function in APEX_MAIL. The
 -- real template-email API, added in APEX 23.1, is an overload of
--- APEX_MAIL.SEND itself: p_template_static_id plus two PARALLEL
--- apex_t_varchar2 arrays (p_placeholder_names / p_placeholder_values), not
--- a single JSON blob. send() below still builds/merges placeholders as
--- JSON internally (JSON_MERGEPATCH, confirmed available) since that keeps
--- the public p_extra_placeholders contract callers (pkg_order, pkg_order_
--- status) already use unchanged, then converts the merged JSON object into
--- the two parallel arrays via JSON_OBJECT_T/JSON_KEY_LIST (native PL/SQL
--- JSON types, not privilege-gated) right before the APEX_MAIL.SEND call.
+-- APEX_MAIL.SEND itself, and its second live-run error (PLS-00306, wrong
+-- number/types of arguments) confirmed that overload does NOT take two
+-- parallel p_placeholder_names/p_placeholder_values arrays either -- per
+-- Oracle's official APEX API docs, it takes a single JSON CLOB parameter,
+-- p_placeholders, alongside p_template_static_id. send() below builds/
+-- merges placeholders as JSON (JSON_MERGEPATCH, confirmed available),
+-- which keeps the public p_extra_placeholders contract callers (pkg_order,
+-- pkg_order_status) already use unchanged, and passes that merged JSON
+-- CLOB straight through as APEX_MAIL.SEND's p_placeholders argument.
 -- ============================================================================
 CREATE OR REPLACE PACKAGE BODY pkg_notify AS
 
@@ -3262,30 +3278,15 @@ CREATE OR REPLACE PACKAGE BODY pkg_notify AS
         END IF;
 
         BEGIN
-            -- Convert the merged JSON placeholders object into the parallel
-            -- name/value arrays APEX_MAIL.SEND's template overload actually
-            -- takes (see this file's header comment).
-            DECLARE
-                l_obj    JSON_OBJECT_T := JSON_OBJECT_T.parse(l_placeholders);
-                l_keys   JSON_KEY_LIST := l_obj.get_keys;
-                l_names  apex_t_varchar2 := apex_t_varchar2();
-                l_values apex_t_varchar2 := apex_t_varchar2();
-            BEGIN
-                FOR i IN 1 .. l_keys.COUNT LOOP
-                    l_names.EXTEND;
-                    l_values.EXTEND;
-                    l_names(l_names.COUNT)   := l_keys(i);
-                    l_values(l_values.COUNT) := l_obj.get_String(l_keys(i));
-                END LOOP;
-
-                l_mail_id := APEX_MAIL.SEND(
-                    p_template_static_id => p_email_type,
-                    p_placeholder_names  => l_names,
-                    p_placeholder_values => l_values,
-                    p_to                 => l_recipient,
-                    p_from               => l_from
-                );
-            END;
+            -- APEX_MAIL.SEND's template overload (see this file's header
+            -- comment) takes the merged JSON placeholders CLOB directly --
+            -- no array conversion needed.
+            l_mail_id := APEX_MAIL.SEND(
+                p_template_static_id => p_email_type,
+                p_placeholders        => l_placeholders,
+                p_to                  => l_recipient,
+                p_from                => l_from
+            );
 
             log_email(p_order_id, p_email_type, l_recipient, 'SUCCESS');
         EXCEPTION
@@ -3574,6 +3575,22 @@ CREATE OR REPLACE PACKAGE BODY pkg_stripe AS
     END get_app_setting;
 
     ----------------------------------------------------------------------------
+    -- sha256_raw (private)
+    -- STANDARD_HASH cannot be called directly as a plain PL/SQL function --
+    -- live-confirmed 2026-09-24: PLS-00201 "identifier 'STANDARD_HASH' must
+    -- be declared". Like a handful of other SQL-only built-ins, it is only
+    -- recognized inside an embedded SQL statement, so it must be invoked via
+    -- SELECT ... INTO ... FROM DUAL. This wraps that so every other
+    -- STANDARD_HASH use in this body stays a plain function call.
+    ----------------------------------------------------------------------------
+    FUNCTION sha256_raw(p_input IN RAW) RETURN RAW IS
+        l_out RAW(32);
+    BEGIN
+        SELECT STANDARD_HASH(p_input, 'SHA256') INTO l_out FROM dual;
+        RETURN l_out;
+    END sha256_raw;
+
+    ----------------------------------------------------------------------------
     -- hmac_sha256 (private)
     -- Hand-built HMAC-SHA256 (RFC 2104) using only STANDARD_HASH and
     -- UTL_RAW -- neither privilege-gated in this workspace, unlike
@@ -3597,7 +3614,7 @@ CREATE OR REPLACE PACKAGE BODY pkg_stripe AS
         l_key := p_key;
 
         IF UTL_RAW.LENGTH(l_key) > c_block_size THEN
-            l_key := STANDARD_HASH(l_key, 'SHA256'); -- down to 32 bytes
+            l_key := sha256_raw(l_key); -- down to 32 bytes
         END IF;
 
         IF UTL_RAW.LENGTH(l_key) < c_block_size THEN
@@ -3613,9 +3630,9 @@ CREATE OR REPLACE PACKAGE BODY pkg_stripe AS
         l_ipad := UTL_RAW.BIT_XOR(l_key, l_ipad_mask);
         l_opad := UTL_RAW.BIT_XOR(l_key, l_opad_mask);
 
-        l_inner := STANDARD_HASH(UTL_RAW.CONCAT(l_ipad, p_msg), 'SHA256');
+        l_inner := sha256_raw(UTL_RAW.CONCAT(l_ipad, p_msg));
 
-        RETURN STANDARD_HASH(UTL_RAW.CONCAT(l_opad, l_inner), 'SHA256');
+        RETURN sha256_raw(UTL_RAW.CONCAT(l_opad, l_inner));
     END hmac_sha256;
 
     ----------------------------------------------------------------------------

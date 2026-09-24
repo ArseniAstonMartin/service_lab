@@ -248,6 +248,22 @@ CREATE OR REPLACE PACKAGE BODY pkg_stripe AS
     END get_app_setting;
 
     ----------------------------------------------------------------------------
+    -- sha256_raw (private)
+    -- STANDARD_HASH cannot be called directly as a plain PL/SQL function --
+    -- live-confirmed 2026-09-24: PLS-00201 "identifier 'STANDARD_HASH' must
+    -- be declared". Like a handful of other SQL-only built-ins, it is only
+    -- recognized inside an embedded SQL statement, so it must be invoked via
+    -- SELECT ... INTO ... FROM DUAL. This wraps that so every other
+    -- STANDARD_HASH use in this body stays a plain function call.
+    ----------------------------------------------------------------------------
+    FUNCTION sha256_raw(p_input IN RAW) RETURN RAW IS
+        l_out RAW(32);
+    BEGIN
+        SELECT STANDARD_HASH(p_input, 'SHA256') INTO l_out FROM dual;
+        RETURN l_out;
+    END sha256_raw;
+
+    ----------------------------------------------------------------------------
     -- hmac_sha256 (private)
     -- Hand-built HMAC-SHA256 (RFC 2104) using only STANDARD_HASH and
     -- UTL_RAW -- neither privilege-gated in this workspace, unlike
@@ -271,7 +287,7 @@ CREATE OR REPLACE PACKAGE BODY pkg_stripe AS
         l_key := p_key;
 
         IF UTL_RAW.LENGTH(l_key) > c_block_size THEN
-            l_key := STANDARD_HASH(l_key, 'SHA256'); -- down to 32 bytes
+            l_key := sha256_raw(l_key); -- down to 32 bytes
         END IF;
 
         IF UTL_RAW.LENGTH(l_key) < c_block_size THEN
@@ -287,9 +303,9 @@ CREATE OR REPLACE PACKAGE BODY pkg_stripe AS
         l_ipad := UTL_RAW.BIT_XOR(l_key, l_ipad_mask);
         l_opad := UTL_RAW.BIT_XOR(l_key, l_opad_mask);
 
-        l_inner := STANDARD_HASH(UTL_RAW.CONCAT(l_ipad, p_msg), 'SHA256');
+        l_inner := sha256_raw(UTL_RAW.CONCAT(l_ipad, p_msg));
 
-        RETURN STANDARD_HASH(UTL_RAW.CONCAT(l_opad, l_inner), 'SHA256');
+        RETURN sha256_raw(UTL_RAW.CONCAT(l_opad, l_inner));
     END hmac_sha256;
 
     ----------------------------------------------------------------------------

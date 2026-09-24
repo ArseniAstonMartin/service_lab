@@ -26,13 +26,29 @@ CREATE OR REPLACE PACKAGE BODY pkg_security AS
     -- matching c_token_bytes exactly, so the rest of this function (unique-
     -- ness retry loop, base64 encoding) is unchanged.
     -- --------------------------------------------------------------------------
+    -- --------------------------------------------------------------------------
+    -- sha256_raw (private)
+    -- STANDARD_HASH cannot be called directly as a plain PL/SQL function --
+    -- live-confirmed 2026-09-24: PLS-00201 "identifier 'STANDARD_HASH' must
+    -- be declared". Like a handful of other SQL-only built-ins, it is only
+    -- recognized inside an embedded SQL statement, so it must be invoked via
+    -- SELECT ... INTO ... FROM DUAL. This wraps that so every other
+    -- STANDARD_HASH use in this body stays a plain function call.
+    -- --------------------------------------------------------------------------
+    FUNCTION sha256_raw(p_input IN RAW) RETURN RAW IS
+        l_out RAW(32);
+    BEGIN
+        SELECT STANDARD_HASH(p_input, 'SHA256') INTO l_out FROM dual;
+        RETURN l_out;
+    END sha256_raw;
+
     FUNCTION generate_tracking_token RETURN VARCHAR2 IS
         l_raw      RAW(32);
         l_token    VARCHAR2(64);
         l_exists   PLS_INTEGER;
     BEGIN
         FOR i IN 1 .. c_max_token_attempts LOOP
-            l_raw := STANDARD_HASH(
+            l_raw := sha256_raw(
                 UTL_RAW.CONCAT(
                     SYS_GUID(),
                     SYS_GUID(),
@@ -41,8 +57,7 @@ CREATE OR REPLACE PACKAGE BODY pkg_security AS
                         || TO_CHAR(SYSTIMESTAMP, 'YYYYMMDDHH24MISSFF9')
                         || TO_CHAR(i)
                     )
-                ),
-                'SHA256'
+                )
             );
 
             -- Standard base64 -> URL-safe base64, no padding:

@@ -8,14 +8,15 @@
 -- APEX_MAIL.SEND_TEMPLATED_EMAIL does not exist (PLS-00302, component must
 -- be declared) -- there is no such procedure/function in APEX_MAIL. The
 -- real template-email API, added in APEX 23.1, is an overload of
--- APEX_MAIL.SEND itself: p_template_static_id plus two PARALLEL
--- apex_t_varchar2 arrays (p_placeholder_names / p_placeholder_values), not
--- a single JSON blob. send() below still builds/merges placeholders as
--- JSON internally (JSON_MERGEPATCH, confirmed available) since that keeps
--- the public p_extra_placeholders contract callers (pkg_order, pkg_order_
--- status) already use unchanged, then converts the merged JSON object into
--- the two parallel arrays via JSON_OBJECT_T/JSON_KEY_LIST (native PL/SQL
--- JSON types, not privilege-gated) right before the APEX_MAIL.SEND call.
+-- APEX_MAIL.SEND itself, and its second live-run error (PLS-00306, wrong
+-- number/types of arguments) confirmed that overload does NOT take two
+-- parallel p_placeholder_names/p_placeholder_values arrays either -- per
+-- Oracle's official APEX API docs, it takes a single JSON CLOB parameter,
+-- p_placeholders, alongside p_template_static_id. send() below builds/
+-- merges placeholders as JSON (JSON_MERGEPATCH, confirmed available),
+-- which keeps the public p_extra_placeholders contract callers (pkg_order,
+-- pkg_order_status) already use unchanged, and passes that merged JSON
+-- CLOB straight through as APEX_MAIL.SEND's p_placeholders argument.
 -- ============================================================================
 CREATE OR REPLACE PACKAGE BODY pkg_notify AS
 
@@ -173,30 +174,15 @@ CREATE OR REPLACE PACKAGE BODY pkg_notify AS
         END IF;
 
         BEGIN
-            -- Convert the merged JSON placeholders object into the parallel
-            -- name/value arrays APEX_MAIL.SEND's template overload actually
-            -- takes (see this file's header comment).
-            DECLARE
-                l_obj    JSON_OBJECT_T := JSON_OBJECT_T.parse(l_placeholders);
-                l_keys   JSON_KEY_LIST := l_obj.get_keys;
-                l_names  apex_t_varchar2 := apex_t_varchar2();
-                l_values apex_t_varchar2 := apex_t_varchar2();
-            BEGIN
-                FOR i IN 1 .. l_keys.COUNT LOOP
-                    l_names.EXTEND;
-                    l_values.EXTEND;
-                    l_names(l_names.COUNT)   := l_keys(i);
-                    l_values(l_values.COUNT) := l_obj.get_String(l_keys(i));
-                END LOOP;
-
-                l_mail_id := APEX_MAIL.SEND(
-                    p_template_static_id => p_email_type,
-                    p_placeholder_names  => l_names,
-                    p_placeholder_values => l_values,
-                    p_to                 => l_recipient,
-                    p_from               => l_from
-                );
-            END;
+            -- APEX_MAIL.SEND's template overload (see this file's header
+            -- comment) takes the merged JSON placeholders CLOB directly --
+            -- no array conversion needed.
+            l_mail_id := APEX_MAIL.SEND(
+                p_template_static_id => p_email_type,
+                p_placeholders        => l_placeholders,
+                p_to                  => l_recipient,
+                p_from                => l_from
+            );
 
             log_email(p_order_id, p_email_type, l_recipient, 'SUCCESS');
         EXCEPTION
