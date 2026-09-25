@@ -1,8 +1,8 @@
 // Prisma schema for ECU Service Lab.
 // Models are added task by task (see TASK-003/004/005 in the Project's
-// tasks.json). This file currently covers the reference-data tables
-// (TASK-003): Vehicle, ModuleCategory, PriceTier, Service,
-// CompatibilityEntry, CompatibilityService.
+// tasks.json). Covers reference data (TASK-003): Vehicle, ModuleCategory,
+// PriceTier, Service, CompatibilityEntry, CompatibilityService; and orders
+// (TASK-004): Order, OrderPhoto, OrderAnswer, OrderStatusHistory.
 
 generator client {
   provider = "prisma-client-js"
@@ -28,6 +28,7 @@ model Vehicle {
   year  Int    @db.SmallInt
 
   compatibilityEntries CompatibilityEntry[]
+  orders               Order[]
 
   @@unique([make, model, year])
   @@map("vehicles")
@@ -39,6 +40,7 @@ model ModuleCategory {
 
   compatibilityEntries CompatibilityEntry[]
   services             Service[]
+  orders               Order[]
 
   @@map("module_categories")
 }
@@ -60,9 +62,10 @@ model CompatibilityEntry {
   createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  vehicle  Vehicle                @relation(fields: [vehicleId], references: [id])
-  category ModuleCategory         @relation(fields: [categoryId], references: [id])
-  services CompatibilityService[]
+  vehicle       Vehicle                @relation(fields: [vehicleId], references: [id])
+  category      ModuleCategory         @relation(fields: [categoryId], references: [id])
+  services      CompatibilityService[]
+  matchedOrders Order[]
 
   // Exact-match lookup: one entry per (vehicle, category, part number).
   @@unique([vehicleId, categoryId, partNumber])
@@ -90,6 +93,7 @@ model Service {
   category           ModuleCategory          @relation(fields: [categoryId], references: [id])
   priceTier          PriceTier               @relation(fields: [tierCode], references: [tierCode])
   compatibilityLinks CompatibilityService[]
+  orders             Order[]
 
   @@map("services")
 }
@@ -105,4 +109,108 @@ model CompatibilityService {
 
   @@id([entryId, serviceId])
   @@map("compatibility_services")
+}
+
+// --- Orders (TASK-004) ----------------------------------------------------
+
+enum OrderStatus {
+  pending_review
+  awaiting_payment
+  payment_received
+  block_received
+  in_progress
+  ready_shipped_back
+  completed
+
+  @@map("order_status")
+}
+
+enum PhotoType {
+  sticker
+  donor
+  original
+
+  @@map("photo_type")
+}
+
+model Order {
+  id                     BigInt      @id @default(autoincrement())
+  trackingToken          String      @unique @map("tracking_token") @db.VarChar(64)
+  status                 OrderStatus @default(pending_review)
+  vehicleId              BigInt      @map("vehicle_id")
+  categoryId             BigInt      @map("category_id")
+  partNumberEntered      String      @map("part_number_entered") @db.VarChar(100)
+  matchedEntryId         BigInt?     @map("matched_entry_id")
+  serviceId              BigInt?     @map("service_id")
+  description            String      @db.Text
+  customerName           String      @map("customer_name") @db.VarChar(150)
+  customerEmail          String      @map("customer_email") @db.VarChar(255)
+  customerPhone          String      @map("customer_phone") @db.VarChar(50)
+  returnAddressStreet    String      @map("return_address_street") @db.VarChar(255)
+  returnAddressCity      String      @map("return_address_city") @db.VarChar(100)
+  returnAddressState     String      @map("return_address_state") @db.VarChar(2)
+  returnAddressZip       String      @map("return_address_zip") @db.VarChar(10)
+  // Price snapshot -- null until the order is matched (auto or admin-confirmed).
+  servicePriceCents      Int?        @map("service_price_cents")
+  returnShippingFeeCents Int?        @map("return_shipping_fee_cents")
+  totalAmountCents       Int?        @map("total_amount_cents")
+  stripePaymentLinkId    String?     @map("stripe_payment_link_id") @db.VarChar(100)
+  paymentLinkUrl         String?     @map("payment_link_url") @db.VarChar(500)
+  stripePaymentStatus    String?     @map("stripe_payment_status") @db.VarChar(30)
+  shippingLabelUrl       String?     @map("shipping_label_url") @db.VarChar(500)
+  returnTrackingNo       String?     @map("return_tracking_no") @db.VarChar(100)
+  // Generated once per wizard session on the client; a repeat submit with
+  // the same key returns the existing order instead of creating a duplicate.
+  idempotencyKey         String      @unique @map("idempotency_key") @db.VarChar(100)
+  createdAt              DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  vehicle       Vehicle              @relation(fields: [vehicleId], references: [id])
+  category      ModuleCategory       @relation(fields: [categoryId], references: [id])
+  matchedEntry  CompatibilityEntry?  @relation(fields: [matchedEntryId], references: [id])
+  service       Service?             @relation(fields: [serviceId], references: [id])
+  photos        OrderPhoto[]
+  answers       OrderAnswer[]
+  statusHistory OrderStatusHistory[]
+
+  @@index([status])
+  @@index([customerEmail])
+  @@index([partNumberEntered])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+model OrderPhoto {
+  id         BigInt    @id @default(autoincrement())
+  orderId    BigInt    @map("order_id")
+  photoType  PhotoType @map("photo_type")
+  blobUrl    String    @map("blob_url") @db.VarChar(500)
+  uploadedAt DateTime  @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@map("order_photos")
+}
+
+model OrderAnswer {
+  id           BigInt @id @default(autoincrement())
+  orderId      BigInt @map("order_id")
+  questionCode String @map("question_code") @db.VarChar(50)
+  answerValue  String @map("answer_value") @db.Text
+
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@map("order_answers")
+}
+
+model OrderStatusHistory {
+  id        BigInt      @id @default(autoincrement())
+  orderId   BigInt      @map("order_id")
+  status    OrderStatus
+  changedAt DateTime    @default(now()) @map("changed_at") @db.Timestamptz(6)
+  changedBy String      @map("changed_by") @db.VarChar(50)
+
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@map("order_status_history")
 }
