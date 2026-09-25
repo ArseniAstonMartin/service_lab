@@ -1,8 +1,10 @@
 // Prisma schema for ECU Service Lab.
 // Models are added task by task (see TASK-003/004/005 in the Project's
 // tasks.json). Covers reference data (TASK-003): Vehicle, ModuleCategory,
-// PriceTier, Service, CompatibilityEntry, CompatibilityService; and orders
-// (TASK-004): Order, OrderPhoto, OrderAnswer, OrderStatusHistory.
+// PriceTier, Service, CompatibilityEntry, CompatibilityService; orders
+// (TASK-004): Order, OrderPhoto, OrderAnswer, OrderStatusHistory; and
+// support tables (TASK-005): AppSetting, QuestionDefinition, StripeEvent,
+// EmailLog.
 
 generator client {
   provider = "prisma-client-js"
@@ -172,6 +174,7 @@ model Order {
   photos        OrderPhoto[]
   answers       OrderAnswer[]
   statusHistory OrderStatusHistory[]
+  emailLogs     EmailLog[]
 
   @@index([status])
   @@index([customerEmail])
@@ -213,4 +216,66 @@ model OrderStatusHistory {
   order Order @relation(fields: [orderId], references: [id])
 
   @@map("order_status_history")
+}
+
+// --- Support tables (TASK-005) --------------------------------------------
+
+// Key/value app configuration. Currently holds return_shipping_fee_cents;
+// edited from /admin/pricing (TASK-044).
+model AppSetting {
+  key       String   @id @db.VarChar(100)
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("app_settings")
+}
+
+enum QuestionAnswerType {
+  text
+  yes_no
+  textarea
+  photo
+
+  @@map("question_answer_type")
+}
+
+// Data-driven question sets rendered by the wizard's dynamic-question step
+// (TASK-020): SRS, CLONING, VIN_WRITE, RESTORATION, FOLLOW_UP (PRD 4.4).
+model QuestionDefinition {
+  id              BigInt             @id @default(autoincrement())
+  questionSetCode String             @map("question_set_code") @db.VarChar(30)
+  questionCode    String             @map("question_code") @db.VarChar(50)
+  label           String             @db.VarChar(255)
+  answerType      QuestionAnswerType @map("answer_type")
+  required        Boolean            @default(true)
+  sortOrder       Int                @map("sort_order")
+
+  @@unique([questionSetCode, questionCode])
+  @@map("question_definitions")
+}
+
+// Stripe webhook idempotency (TASK-027): the event id itself is the
+// primary key, so a re-delivered event is a no-op insert conflict.
+model StripeEvent {
+  id          String   @id @db.VarChar(255)
+  type        String   @db.VarChar(100)
+  processedAt DateTime @default(now()) @map("processed_at") @db.Timestamptz(6)
+
+  @@map("stripe_events")
+}
+
+// One row per (order, email type) actually sent (TASK-041/042/043); the
+// unique constraint is what prevents sending the same email twice.
+model EmailLog {
+  id        BigInt   @id @default(autoincrement())
+  orderId   BigInt   @map("order_id")
+  emailType String   @map("email_type") @db.VarChar(30)
+  status    String   @db.VarChar(20)
+  error     String?  @db.Text
+  sentAt    DateTime @default(now()) @map("sent_at") @db.Timestamptz(6)
+
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@unique([orderId, emailType])
+  @@map("email_logs")
 }
