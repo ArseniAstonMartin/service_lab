@@ -28,7 +28,9 @@
     "sonner": "^1.7.1",
     "react-hook-form": "^7.54.2",
     "@hookform/resolvers": "^3.9.1",
-    "server-only": "^0.0.1"
+    "server-only": "^0.0.1",
+    "@supabase/ssr": "^0.5.2",
+    "@supabase/supabase-js": "^2.47.10"
   },
   "devDependencies": {
     "typescript": "^5.7.2",

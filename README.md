@@ -43,6 +43,28 @@ web/
   prisma/         Schema and migrations
 ```
 
+## Admin authentication
+
+Admin access uses Supabase Auth (email/password). There is no public
+sign-up flow — admin accounts are created manually.
+
+**Disable public sign-ups** in the Supabase dashboard: Authentication →
+Providers → Email → turn off "Allow new users to sign up". This must be
+done once per environment (the Supabase project is shared across
+Preview/Production in this setup).
+
+**Create an admin user**: Supabase dashboard → Authentication → Users →
+"Add user" → set an email and password (or "Send invite"). Any user that
+exists in Supabase Auth can log in at `/admin/login` — there is currently
+no separate admin role/claim, so anyone with a Supabase Auth account for
+this project is treated as an admin.
+
+Middleware (`middleware.ts`) refreshes the session on every request and
+redirects unauthenticated visits to `/admin/*` pages to `/admin/login`.
+Server Actions and Route Handlers are **not** covered by middleware — each
+one that needs admin access must call `requireAdmin()` from
+`lib/supabase/require-admin.ts` explicitly.
+
 ## Getting started
 
 ```
