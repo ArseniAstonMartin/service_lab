@@ -1,7 +1,8 @@
 // Prisma schema for ECU Service Lab.
 // Models are added task by task (see TASK-003/004/005 in the Project's
-// tasks.json) — this file starts with just the datasource/generator so
-// `prisma generate` and the Prisma Client singleton work from TASK-002 on.
+// tasks.json). This file currently covers the reference-data tables
+// (TASK-003): Vehicle, ModuleCategory, PriceTier, Service,
+// CompatibilityEntry, CompatibilityService.
 
 generator client {
   provider = "prisma-client-js"
@@ -15,4 +16,92 @@ datasource db {
   // Direct connection — used only for `prisma migrate` / `prisma db push`,
   // which need a non-pooled connection to run DDL.
   directUrl = env("DIRECT_URL")
+}
+
+// --- Reference data (TASK-003) -------------------------------------------
+
+model Vehicle {
+  id    BigInt @id @default(autoincrement())
+  make  String @db.VarChar(50)
+  model String @db.VarChar(50)
+  year  Int    @db.SmallInt
+
+  compatibilityEntries CompatibilityEntry[]
+
+  @@unique([make, model, year])
+  @@map("vehicles")
+}
+
+model ModuleCategory {
+  id   BigInt @id @default(autoincrement())
+  name String @db.VarChar(50)
+
+  compatibilityEntries CompatibilityEntry[]
+  services             Service[]
+
+  @@map("module_categories")
+}
+
+enum EntrySource {
+  import
+  admin_confirmed
+
+  @@map("entry_source")
+}
+
+model CompatibilityEntry {
+  id           BigInt      @id @default(autoincrement())
+  vehicleId    BigInt      @map("vehicle_id")
+  categoryId   BigInt      @map("category_id")
+  partNumber   String      @map("part_number") @db.VarChar(100)
+  photoHintUrl String?     @map("photo_hint_url") @db.VarChar(500)
+  source       EntrySource
+  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  vehicle  Vehicle                @relation(fields: [vehicleId], references: [id])
+  category ModuleCategory         @relation(fields: [categoryId], references: [id])
+  services CompatibilityService[]
+
+  // Exact-match lookup: one entry per (vehicle, category, part number).
+  @@unique([vehicleId, categoryId, partNumber])
+  // part_number is also looked up on its own during CSV import validation.
+  @@index([partNumber])
+  @@map("compatibility_entries")
+}
+
+model PriceTier {
+  tierCode    String @id @map("tier_code") @db.VarChar(10)
+  amountCents Int    @map("amount_cents")
+
+  services Service[]
+
+  @@map("price_tiers")
+}
+
+model Service {
+  id              BigInt @id @default(autoincrement())
+  categoryId      BigInt @map("category_id")
+  name            String @db.VarChar(100)
+  tierCode        String @map("price_tier") @db.VarChar(10)
+  questionSetCode String @map("question_set_code") @db.VarChar(30)
+
+  category           ModuleCategory          @relation(fields: [categoryId], references: [id])
+  priceTier          PriceTier               @relation(fields: [tierCode], references: [tierCode])
+  compatibilityLinks CompatibilityService[]
+
+  @@map("services")
+}
+
+// Junction table: which services are confirmed supported for a given
+// compatibility entry (Make/Model/Year/Category/Part Number).
+model CompatibilityService {
+  entryId   BigInt @map("entry_id")
+  serviceId BigInt @map("service_id")
+
+  entry   CompatibilityEntry @relation(fields: [entryId], references: [id])
+  service Service            @relation(fields: [serviceId], references: [id])
+
+  @@id([entryId, serviceId])
+  @@map("compatibility_services")
 }
