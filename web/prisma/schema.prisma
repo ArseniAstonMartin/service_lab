@@ -10,11 +10,12 @@ generator client {
 
 datasource db {
   provider  = "postgresql"
-  // Pooled connection (Supabase Supavisor, transaction mode) — used at
-  // runtime by the app. Must include ?pgbouncer=true.
+  // Transaction-mode pooler (Supabase Supavisor, IPv4, pgbouncer) — used
+  // at runtime by the app. Must include ?pgbouncer=true.
   url       = env("DATABASE_URL")
-  // Direct connection — used only for `prisma migrate` / `prisma db push`,
-  // which need a non-pooled connection to run DDL.
+  // Session-mode pooler — used only for `prisma migrate` / `prisma db
+  // push`. (Supabase recommends the session pooler over the bare direct
+  // db.<ref>.supabase.co host, which is IPv6-only on the free tier.)
   directUrl = env("DIRECT_URL")
 }
 
