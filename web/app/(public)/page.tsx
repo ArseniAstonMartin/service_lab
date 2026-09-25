@@ -1,4 +1,13 @@
-export default function HomePage() {
+import { prisma } from "@/lib/db";
+
+export const dynamic = "force-dynamic";
+
+export default async function HomePage() {
+  const [categoryCount, serviceCount] = await Promise.all([
+    prisma.moduleCategory.count(),
+    prisma.service.count(),
+  ]);
+
   return (
     <main className="flex min-h-screen flex-col items-center justify-center p-8">
       <h1 className="text-3xl font-semibold tracking-tight">
@@ -6,6 +15,9 @@ export default function HomePage() {
       </h1>
       <p className="mt-2 text-muted-foreground">
         Automotive Module Compatibility &amp; Repair Service — Oahu, Hawaii
+      </p>
+      <p className="mt-6 text-sm text-muted-foreground">
+        {categoryCount} module categories · {serviceCount} services configured
       </p>
     </main>
   );

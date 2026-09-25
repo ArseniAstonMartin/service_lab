@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "postinstall": "prisma generate",
-    "db:seed": "prisma db seed"
+    "db:seed": "prisma db seed",
+    "vercel-build": "if [ \"$VERCEL_ENV\" = \"production\" ]; then prisma generate && prisma migrate deploy && next build; else prisma generate && next build; fi"
   },
   "dependencies": {
     "next": "^15.1.4",
