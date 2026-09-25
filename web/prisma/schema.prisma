@@ -1,0 +1,18 @@
+// Prisma schema for ECU Service Lab.
+// Models are added task by task (see TASK-003/004/005 in the Project's
+// tasks.json) — this file starts with just the datasource/generator so
+// `prisma generate` and the Prisma Client singleton work from TASK-002 on.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  // Pooled connection (Supabase Supavisor, transaction mode) — used at
+  // runtime by the app. Must include ?pgbouncer=true.
+  url       = env("DATABASE_URL")
+  // Direct connection — used only for `prisma migrate` / `prisma db push`,
+  // which need a non-pooled connection to run DDL.
+  directUrl = env("DIRECT_URL")
+}
