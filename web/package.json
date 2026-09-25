@@ -30,7 +30,8 @@
     "@hookform/resolvers": "^3.9.1",
     "server-only": "^0.0.1",
     "@supabase/ssr": "^0.5.2",
-    "@supabase/supabase-js": "^2.47.10"
+    "@supabase/supabase-js": "^2.47.10",
+    "@vercel/blob": "^0.27.1"
   },
   "devDependencies": {
     "typescript": "^5.7.2",
