@@ -1,27 +1,3 @@
-# Oracle wallets / TLS credentials for ATP connections
-*wallet*/
-*Wallet*/
-cwallet.sso
-ewallet.p12
-ewallet.pem
-keystore.jks
-truststore.jks
-tnsnames.ora
-sqlnet.ora
-ojdbc.properties
-
-# Environment / secrets
-*.env
-.env.*
-*.secret
-*credentials*
-*.pem
-*.key
-
-# SQLcl / SQL*Plus session artifacts
-*.log
-sqlnet.log
-
 # OS / editor noise
 .DS_Store
 *.swp
