@@ -1626,5 +1626,5 @@ still depends on TASK-028.
 
 ## 2026-09-26 — TASK-046: Production launch configuration (in progress)
 - Seed no longer writes sample vehicles/entries when `VERCEL_ENV=production`. README now records the launch decisions: site URL `https://ecu-service-lab.vercel.app`, paid Supabase (Pro or above) required for daily backups (org is still Free), Stripe live keys still needed, Resend domain still unverified, real coverage imported via `/admin/compatibility/import` not `SEED_SAMPLE`.
-- Registered a test-mode Stripe webhook for `checkout.session.completed` on the production URL and stored its signing secret in Vercel. Still blocked on a custom domain, live Stripe keys, a verified Resend sending domain, a paid Supabase upgrade, publishing the WAF rules, and a real import file in the TASK-039 column format.
+- Registered a test-mode Stripe webhook for `checkout.session.completed` on the production URL and stored its signing secret in Vercel. Production URL is `https://ecu-service-lab.vercel.app` (no custom domain). Still blocked on live Stripe keys, a verified Resend sending domain, a paid Supabase upgrade, publishing the WAF rules, and a real import file in the TASK-039 column format.
  

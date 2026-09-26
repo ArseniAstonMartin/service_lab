@@ -79,12 +79,12 @@ Project's `tasks.json` `agent_instructions`.
 
 ## Production launch
 
-The production Vercel project is `ecu-service-lab`
-(`https://ecu-service-lab.vercel.app`). `NEXT_PUBLIC_SITE_URL` in the
-Production environment is set to that URL. A custom domain is not
-attached yet — when one is added in Vercel, point
-`NEXT_PUBLIC_SITE_URL` at `https://<domain>` and redeploy so payment
-links, tracking links and emails use it.
+The production Vercel project is `ecu-service-lab`. The chosen
+production URL is `https://ecu-service-lab.vercel.app` (no custom
+domain). `NEXT_PUBLIC_SITE_URL` in the Production environment is set
+to that URL so payment links, tracking links and emails use it. If a
+custom domain is added later, point `NEXT_PUBLIC_SITE_URL` at
+`https://<domain>` and redeploy.
 
 ### Stripe
 
