@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 import { AdminNav } from "@/components/admin/admin-nav";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { prisma } from "@/lib/db";
 
 /**
  * Shared shell for every authenticated admin page (everything under
@@ -28,9 +29,15 @@ export default async function AdminDashboardLayout({
     redirect("/admin/login");
   }
 
+  // Loaded server-side so the badge is correct on first paint (TASK-035);
+  // a cheap count query, not the full review-queue list.
+  const pendingReviewCount = await prisma.order.count({
+    where: { status: "pending_review" },
+  });
+
   return (
     <div className="min-h-screen bg-muted/30">
-      <AdminNav userEmail={user.email ?? null} />
+      <AdminNav userEmail={user.email ?? null} pendingReviewCount={pendingReviewCount} />
       <main className="p-4 md:p-6">{children}</main>
     </div>
   );

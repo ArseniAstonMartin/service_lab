@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { signOut } from "@/lib/actions/auth";
 import { cn } from "@/lib/utils";
@@ -17,9 +18,11 @@ const NAV_ITEMS = [
 function NavLinks({
   onNavigate,
   className,
+  pendingReviewCount,
 }: {
   onNavigate?: () => void;
   className?: string;
+  pendingReviewCount: number;
 }) {
   const pathname = usePathname();
 
@@ -33,13 +36,21 @@ function NavLinks({
             href={item.href}
             onClick={onNavigate}
             className={cn(
-              "rounded-md px-3 py-2 text-sm font-medium transition-colors",
+              "flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors",
               active
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:bg-muted hover:text-foreground",
             )}
           >
             {item.label}
+            {item.href === "/admin/review-queue" && pendingReviewCount > 0 ? (
+              <Badge
+                variant="outline"
+                className="border-none bg-amber-500 px-1.5 py-0 text-xs text-white"
+              >
+                {pendingReviewCount}
+              </Badge>
+            ) : null}
           </Link>
         );
       })}
@@ -53,7 +64,13 @@ function NavLinks({
  * yet, so this is a small hand-rolled collapsible instead of pulling
  * one in for a single use).
  */
-export function AdminNav({ userEmail }: { userEmail: string | null }) {
+export function AdminNav({
+  userEmail,
+  pendingReviewCount,
+}: {
+  userEmail: string | null;
+  pendingReviewCount: number;
+}) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -63,7 +80,7 @@ export function AdminNav({ userEmail }: { userEmail: string | null }) {
           <Link href="/admin" className="shrink-0 font-semibold">
             ECU Service Lab
           </Link>
-          <NavLinks className="hidden md:flex" />
+          <NavLinks className="hidden md:flex" pendingReviewCount={pendingReviewCount} />
         </div>
 
         <div className="flex items-center gap-3">
@@ -93,7 +110,7 @@ export function AdminNav({ userEmail }: { userEmail: string | null }) {
 
       {open ? (
         <div id="admin-mobile-nav" className="border-t px-4 py-3 md:hidden">
-          <NavLinks onNavigate={() => setOpen(false)} />
+          <NavLinks onNavigate={() => setOpen(false)} pendingReviewCount={pendingReviewCount} />
           <form action={signOut} className="mt-3">
             <Button type="submit" variant="outline" size="sm" className="w-full">
               Log out
