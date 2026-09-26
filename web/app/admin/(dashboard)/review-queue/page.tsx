@@ -2,20 +2,33 @@ import { prisma } from "@/lib/db";
 import { ReviewQueueCard } from "@/components/admin/review-queue-card";
 
 /**
- * /admin/review-queue (TASK-035) -- the pending_review worklist. Confirm
- * dialog / confirmCompatibility wiring is TASK-036/037's job; this task
- * only lists the queue.
+ * /admin/review-queue (TASK-035) -- the pending_review worklist, with
+ * TASK-037's confirm-compatibility Dialog wired into each card.
  */
 export default async function AdminReviewQueuePage() {
-  const orders = await prisma.order.findMany({
-    where: { status: "pending_review" },
-    orderBy: { createdAt: "asc" },
-    include: {
-      vehicle: true,
-      category: true,
-      photos: { where: { photoType: "sticker" }, take: 1 },
-    },
-  });
+  const [orders, services] = await Promise.all([
+    prisma.order.findMany({
+      where: { status: "pending_review" },
+      orderBy: { createdAt: "asc" },
+      include: {
+        vehicle: true,
+        category: true,
+        photos: { where: { photoType: "sticker" }, take: 1 },
+      },
+    }),
+    // Fetched once for every category rather than per-order: the
+    // review queue is small and categories repeat, so this is one
+    // query instead of N.
+    prisma.service.findMany({ orderBy: { name: "asc" } }),
+  ]);
+
+  const servicesByCategory = new Map<string, { id: string; name: string }[]>();
+  for (const service of services) {
+    const key = service.categoryId.toString();
+    const list = servicesByCategory.get(key) ?? [];
+    list.push({ id: service.id.toString(), name: service.name });
+    servicesByCategory.set(key, list);
+  }
 
   return (
     <div className="space-y-4">
@@ -40,6 +53,7 @@ export default async function AdminReviewQueuePage() {
               description={order.description}
               stickerPhotoUrl={order.photos[0]?.blobUrl ?? null}
               createdAt={order.createdAt.toISOString()}
+              categoryServices={servicesByCategory.get(order.categoryId.toString()) ?? []}
             />
           ))}
         </div>
