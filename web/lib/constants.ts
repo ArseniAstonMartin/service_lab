@@ -40,3 +40,15 @@ export const SHOP_SHIPPING_ADDRESS = {
   name: "ECU Service Lab",
   locality: "Oahu, Hawaii",
 } as const;
+
+/**
+ * UI-facing labels for CompatibilityEntry.source (TASK-038's admin
+ * compatibility table, TASK-039/040's import). Kept here rather than
+ * imported straight from @prisma/client's EntrySource enum so this file
+ * stays the one place display strings for a Prisma enum live, matching
+ * STATUS_LABELS above.
+ */
+export const ENTRY_SOURCE_LABELS: Record<"import" | "admin_confirmed", string> = {
+  import: "Import",
+  admin_confirmed: "Admin confirmed",
+};

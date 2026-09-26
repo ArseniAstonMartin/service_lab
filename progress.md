@@ -1566,4 +1566,9 @@ still depends on TASK-028.
 - Verified with `tsc --noEmit` and a full `next build` (all routes compile, `/admin/review-queue` is correctly dynamic); could not click through the actual dialog in-browser — no admin Supabase Auth credentials are available in this session (README: admin users are created manually per environment) — so a real login + confirm-flow pass is still needed at the user's machine.
 - **Next up:** TASK-038 (read-only compatibility DB screen) and TASK-039/040 (Excel/CSV import) are the next unblocked high-priority picks; TASK-033/034 (label upload, customer history) are unblocked medium picks.
 
+## 2026-09-26 — TASK-038: /admin/compatibility read-only searchable table
+- `/admin/compatibility` (Server Component) filters `CompatibilityEntry` via searchParams (`q` on part number, `make`, `categoryId`, `source`), paginated 20/page, newest first; `CompatibilityFilterBar` (debounced search + three Selects, same URL-as-state pattern as `OrdersFilterBar`) and `CompatibilityTable` (Make/Model/Year/Category/Part Number/service Badges/source Badge) are new; reuses `OrdersPagination` as-is since it was already fully generic. The make filter's options come from `Vehicle`s that actually have an entry, not every `Vehicle` row. Added `ENTRY_SOURCE_LABELS` to `lib/constants.ts`.
+- Verified with `tsc --noEmit` and a full `next build` (route compiles, correctly dynamic, 3.12 kB); read-only SQL against the live project confirms 3 real entries (2 with linked services, 1 without) so the table's "No services confirmed" fallback path is exercised by real data. No admin login available in this session to click through the actual page.
+- **Next up:** TASK-039 (Excel/CSV import preview/apply Server Actions) is the natural next step — populates this same table at scale; TASK-040 is its UI. TASK-033/034 remain the unblocked medium picks.
+
  
