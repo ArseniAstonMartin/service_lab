@@ -7,16 +7,18 @@ import { OrderStatusBadge } from "@/components/admin/order-status-badge";
 import { OrderPhotoGallery } from "@/components/admin/order-photo-gallery";
 import { OrderStatusTimeline } from "@/components/admin/order-status-timeline";
 import { RegeneratePaymentLinkButton } from "@/components/admin/regenerate-payment-link-button";
+import { UpdateStatusControl } from "@/components/admin/update-status-control";
 
 /**
- * /admin/orders/[id] -- order detail (TASK-031).
+ * /admin/orders/[id] -- order detail (TASK-031), plus the manual
+ * status-update control (TASK-032).
  *
  * Plain Server Component, no explicit requireAdmin() call -- same
  * layering decision as TASK-030's orders list: middleware.ts and the
  * dashboard layout's redirect-on-no-session already guard every page
  * navigation under /admin/*; requireAdmin() is reserved for the Server
- * Actions this page's buttons call (regeneratePaymentLink), which are
- * independently reachable endpoints.
+ * Actions this page's buttons call (regeneratePaymentLink,
+ * updateOrderStatus), which are independently reachable endpoints.
  */
 export default async function AdminOrderDetailPage({
   params,
@@ -81,6 +83,15 @@ export default async function AdminOrderDetailPage({
           <OrderStatusBadge status={order.status} />
         </div>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Manage status</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <UpdateStatusControl orderId={order.id.toString()} currentStatus={order.status} />
+        </CardContent>
+      </Card>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
