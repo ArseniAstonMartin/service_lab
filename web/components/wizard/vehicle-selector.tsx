@@ -12,11 +12,16 @@ import {
 } from "@/components/ui/select";
 import { getModels, getYears } from "@/lib/actions/vehicle";
 import { useWizard } from "@/components/wizard/wizard-store";
+import { useStepGuard } from "@/components/wizard/use-step-guard";
 
 export function VehicleSelector({ makes }: { makes: string[] }) {
   const router = useRouter();
   const { state, update } = useWizard();
   const [isPending, startTransition] = useTransition();
+  // /order/vehicle is the first step — nothing to redirect back to —
+  // but this still waits out sessionStorage hydration before rendering,
+  // consistent with every other guarded step (TASK-024).
+  const ready = useStepGuard("vehicle");
 
   const [models, setModels] = useState<string[]>([]);
   const [years, setYears] = useState<number[]>([]);
@@ -66,6 +71,10 @@ export function VehicleSelector({ makes }: { makes: string[] }) {
   }
 
   const canContinue = Boolean(make && model && year);
+
+  if (!ready) {
+    return null;
+  }
 
   return (
     <div className="space-y-6">

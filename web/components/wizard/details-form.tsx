@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { DynamicQuestion } from "@/components/wizard/dynamic-question";
 import { useWizard } from "@/components/wizard/wizard-store";
+import { useStepGuard } from "@/components/wizard/use-step-guard";
 import { getQuestions, type QuestionSummary } from "@/lib/actions/questions";
 
 /**
@@ -22,6 +23,9 @@ import { getQuestions, type QuestionSummary } from "@/lib/actions/questions";
 export function DetailsForm() {
   const router = useRouter();
   const { state, update } = useWizard();
+  // Redirects to /order/compatibility (no check run yet) or
+  // /order/service (matched but no service chosen yet) — TASK-024.
+  const ready = useStepGuard("details");
 
   const serviceId = state.serviceId;
   const isMatchedPath = Boolean(serviceId);
@@ -99,6 +103,10 @@ export function DetailsForm() {
   }
 
   const canContinue = !isLoadingQuestions;
+
+  if (!ready) {
+    return null;
+  }
 
   return (
     <div className="space-y-6">

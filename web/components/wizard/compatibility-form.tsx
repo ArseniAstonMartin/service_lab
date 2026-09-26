@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { FileUpload } from "@/components/wizard/file-upload";
 import { useWizard } from "@/components/wizard/wizard-store";
+import { useStepGuard } from "@/components/wizard/use-step-guard";
 import { checkCompatibility } from "@/lib/actions/compatibility";
 import type { WizardMatchResult } from "@/lib/wizard/types";
 
@@ -44,6 +45,10 @@ function StickerReference() {
 export function CompatibilityForm() {
   const router = useRouter();
   const { state, update } = useWizard();
+  // Redirects to /order/vehicle or /order/module if either is missing
+  // yet (TASK-024) — checkCompatibility needs a vehicle and a category
+  // to check against.
+  const ready = useStepGuard("compatibility");
 
   const [partNumber, setPartNumber] = useState(state.partNumber);
   const [stickerPhotoUrl, setStickerPhotoUrl] = useState<string | null>(state.stickerPhotoUrl);
@@ -89,6 +94,10 @@ export function CompatibilityForm() {
   function handleContinue() {
     if (!result) return;
     router.push(result.matched ? "/order/service" : "/order/details");
+  }
+
+  if (!ready) {
+    return null;
   }
 
   return (

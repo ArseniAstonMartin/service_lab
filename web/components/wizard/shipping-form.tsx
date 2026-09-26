@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/form";
 import { Card } from "@/components/ui/card";
 import { useWizard } from "@/components/wizard/wizard-store";
+import { useStepGuard } from "@/components/wizard/use-step-guard";
 import { getCategoryName, getQuote, type ServiceQuote } from "@/lib/actions/shipping";
 import { placeOrder } from "@/lib/actions/place-order";
 import { writeOrderResult } from "@/lib/wizard/order-result";
@@ -81,6 +82,11 @@ function ReviewRow({
 export function ShippingForm() {
   const router = useRouter();
   const { state, update, reset } = useWizard();
+  // Redirects back to whichever earlier step hasn't been completed yet
+  // (TASK-024) — this is the last step before placeOrder is called, so
+  // it has the most to check: a compatibility result, a service choice
+  // on the matched path, and a saved description.
+  const ready = useStepGuard("shipping");
 
   const isMatchedPath = Boolean(state.serviceId);
 
@@ -201,6 +207,10 @@ export function ShippingForm() {
   }
 
   const matchedServiceName = serviceQuote?.service.name ?? null;
+
+  if (!ready) {
+    return null;
+  }
 
   return (
     <div className="space-y-6">

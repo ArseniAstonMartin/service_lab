@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { useWizard } from "@/components/wizard/wizard-store";
+import { useStepGuard } from "@/components/wizard/use-step-guard";
 import type { ModuleCategoryOption } from "@/lib/actions/module";
 
 // Icons keyed by the exact category name from the seed data (TASK-007):
@@ -42,12 +43,20 @@ function iconFor(name: string): LucideIcon {
 export function ModuleSelector({ categories }: { categories: ModuleCategoryOption[] }) {
   const router = useRouter();
   const { state, update } = useWizard();
+  // Redirects to /order/vehicle if the wizard has no vehicle yet
+  // (TASK-024) — a direct link or a back/forward navigation here
+  // otherwise has nothing to scope the category to.
+  const ready = useStepGuard("module");
 
   const categoryId = state.categoryId;
   const canContinue = Boolean(categoryId);
 
   function handleSelect(id: string) {
     update({ categoryId: id });
+  }
+
+  if (!ready) {
+    return null;
   }
 
   return (

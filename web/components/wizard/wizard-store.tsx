@@ -19,6 +19,12 @@ type WizardContextValue = {
   /** Clears wizard state both in memory and in sessionStorage (used on
    * /order/confirmation once an order has been placed). */
   reset: () => void;
+  /** True once the initial sessionStorage read has completed. Before
+   * this, `state` is always `initialWizardState` even when real data is
+   * sitting in sessionStorage — TASK-024's step guards must wait for it
+   * before concluding a step's prerequisites aren't met, since they'd
+   * otherwise fire a false redirect on every single page load. */
+  isHydrated: boolean;
 };
 
 const WizardContext = createContext<WizardContextValue | null>(null);
@@ -90,8 +96,9 @@ export function WizardProvider({ children }: { children: ReactNode }) {
           // ignore
         }
       },
+      isHydrated: hydrated,
     }),
-    [state],
+    [state, hydrated],
   );
 
   return <WizardContext.Provider value={value}>{children}</WizardContext.Provider>;

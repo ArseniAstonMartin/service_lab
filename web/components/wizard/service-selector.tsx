@@ -1,12 +1,12 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { formatCents } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useWizard } from "@/components/wizard/wizard-store";
+import { useStepGuard } from "@/components/wizard/use-step-guard";
 
 /**
  * /order/service: radio cards for the services confirmed on the match
@@ -18,6 +18,11 @@ import { useWizard } from "@/components/wizard/wizard-store";
 export function ServiceSelector() {
   const router = useRouter();
   const { state, update } = useWizard();
+  // Redirects to /order/compatibility unless the store holds a
+  // successful match (TASK-024's acceptance criteria for this step
+  // specifically) — replaces the temporary "go back" fallback this
+  // page rendered before the guard existed.
+  const ready = useStepGuard("service");
 
   const services = state.matchResult?.services ?? [];
   const serviceId = state.serviceId;
@@ -27,20 +32,8 @@ export function ServiceSelector() {
     update({ serviceId: id });
   }
 
-  if (services.length === 0) {
-    // No confirmed services in wizard state — either this is a
-    // not-matched order (which the compatibility step already routes to
-    // /order/details, skipping this page) or the customer deep-linked
-    // here directly. TASK-024 adds a proper step-guard redirect; for now
-    // this is a safe fallback rather than rendering an empty radiogroup.
-    return (
-      <div className="space-y-4 text-sm text-muted-foreground">
-        <p>We don&apos;t have a confirmed service to show yet.</p>
-        <Link href="/order/compatibility" className="text-primary underline">
-          Go back to the part number step
-        </Link>
-      </div>
-    );
+  if (!ready) {
+    return null;
   }
 
   return (
