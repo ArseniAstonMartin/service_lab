@@ -1556,4 +1556,8 @@ still depends on TASK-028.
 - Tracking page shows packing instructions, a printable `/track/[token]/slip`, and a label download only after `payment_received`; unpaid tokens get the same generic not-found on `/slip`.
 - **Next up:** TASK-036 confirmCompatibility (critical; review queue is still read-only without it). TASK-033 (admin label upload) unblocks a real shippingLabelUrl on this page.
 
+## 2026-09-26 — TASK-036: confirmCompatibility Server Action
+- `lib/actions/confirm-compatibility.ts`: `requireAdmin`+zod, rejects non-`pending_review` orders, validates `supportedServiceIds`/`selectedServiceId` against the order's own category's services, upserts the `CompatibilityEntry` (`admin_confirmed`) keyed on the order's vehicle/category/part-number, replaces its `CompatibilityService` links, snapshots the quote onto the order, then calls `advanceOrderStatus` → `awaiting_payment` (triggers TASK-026's payment link via the existing `lib/services/payment` side effect). `tsc --noEmit` clean; schema/data sanity-checked against the live Supabase project (order #2, BCM category, services #8/#9).
+- **Next up:** TASK-037 (the confirm dialog in `/admin/review-queue` that actually calls this action — first real UI/browser test for TASK-036's logic). TASK-038/039/040 (compatibility DB screen + import) are the next unblocked critical/high picks after that.
+
  
