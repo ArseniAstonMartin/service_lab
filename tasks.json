@@ -1,0 +1,836 @@
+{
+  "project": {
+    "name": "ECU Service Lab — Automotive Module Compatibility & Repair Service Platform",
+    "source": "PRD - Automotive Module Compatibility & Repair Service.md (revised for Next.js + Prisma + Supabase + Vercel)",
+    "version": "4.0",
+    "stack": {
+      "app": "Next.js (App Router) + TypeScript — one app for the public wizard, admin panel and API",
+      "ui": "Tailwind CSS + shadcn/ui",
+      "data": "Prisma ORM on Supabase PostgreSQL (pooled connection for runtime, direct connection for migrations)",
+      "auth": "Supabase Auth (email/password), admin only, checked in middleware.ts and in every admin Server Action",
+      "files": "Vercel Blob with client uploads through signed tokens",
+      "payments": "Stripe Node SDK — Payment Links + webhook Route Handler",
+      "email": "Resend",
+      "hosting": "Vercel (git-push deploys, preview deployments)"
+    },
+    "scope": "Core MVP only (PRD sections 3–10). Excluded: every future-phase item in PRD section 11, plus the optional items in section 12 (cancelled status, revert to pending review, photo hints, a separate staging database).",
+    "conventions": {
+      "money": "Integer cents in the database and server code; format as dollars only in the UI",
+      "statuses": "pending_review, awaiting_payment, payment_received, block_received, in_progress, ready_shipped_back, completed",
+      "mutations": "Server Actions for in-app forms and admin mutations; Route Handlers only for the Stripe webhook and the Blob upload token",
+      "business_rules": "Pure functions in /lib/domain; Server Actions do the Prisma calls and orchestration",
+      "validation": "Every Server Action and Route Handler validates its input with zod on the server",
+      "language": "All code, comments, commit messages and docs in English"
+    }
+  },
+  "agent_instructions": {
+    "before_start": [
+      "Read this file and run git log --oneline -20",
+      "Pick ONE task with status pending and the highest priority",
+      "Check that every task in its dependencies has status done"
+    ],
+    "during_work": [
+      "Work only on the selected task",
+      "Commit after each logical change",
+      "Do not touch code unrelated to the current task",
+      "Schema changes go only through prisma/schema.prisma plus a new migration from prisma migrate dev; never edit an applied migration, and never use db push outside throwaway local prototyping",
+      "Never trust price, match or status data sent from the client — recompute it on the server"
+    ],
+    "before_finish": [
+      "Set status to done by editing tasks.json directly — change only the status field of the completed task, no validation scripts",
+      "Add ONE line to progress.md: '## YYYY-MM-DD — TASK-XXX: <name>\n- <what was done in 1–2 sentences>'",
+      "FORBIDDEN: creating scratch/temp files (tasks_scratch.json, progress_old.md, etc.) — all edits go directly to the target file",
+      "FORBIDDEN: deleting or editing tasks other than changing their status"
+    ],
+    "optimization_rules": [
+      "No temporary files: never create files like tasks_scratch.json or progress_old.md; update target files in a single clean operation",
+      "Ultra-short progress.md: each entry is strictly 1–2 lines — no essays, no walls of text",
+      "Fast status updates: change task status directly via a simple JSON edit; skip multi-step script validations",
+      "Spend context on code and functionality, not paperwork and bureaucratic logs"
+    ]
+  },
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "phase": 0,
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Scaffold the Next.js app: App Router, TypeScript, Tailwind, shadcn/ui, folder layout and typed env config",
+      "acceptance_criteria": [
+        "create-next-app with App Router, TypeScript, Tailwind and ESLint; shadcn/ui initialized in /components/ui with Button, Input, Select, Card, Dialog, Table, Badge, Form and Sonner",
+        "The folders from PRD section 7 exist: app/(public), app/admin, app/api, lib/{domain,actions,email}, components/{ui,wizard,admin}, prisma",
+        "/lib/env.ts parses all server env vars with zod (DATABASE_URL, DIRECT_URL, Supabase keys, BLOB_READ_WRITE_TOKEN, Stripe keys, RESEND_API_KEY, ADMIN_NOTIFICATION_EMAIL, NEXT_PUBLIC_SITE_URL) and fails fast when one is missing",
+        ".env.example lists every variable; .env* files are git-ignored; npm run build passes"
+      ],
+      "dependencies": [],
+      "status": "done"
+    },
+    {
+      "id": "TASK-002",
+      "phase": 0,
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Connect Prisma to Supabase Postgres and add the Prisma client singleton",
+      "acceptance_criteria": [
+        "schema.prisma datasource uses DATABASE_URL (the Supabase transaction pooler, with ?pgbouncer=true) and directUrl = DIRECT_URL for migrations",
+        "/lib/db.ts exports a global-cached PrismaClient that is not recreated on hot reload and is marked server-only",
+        "The package.json build script runs prisma generate; postinstall runs prisma generate"
+      ],
+      "dependencies": [
+        "TASK-001"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-003",
+      "phase": 0,
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Prisma models and migration for the reference data: Vehicle, ModuleCategory, PriceTier, Service, CompatibilityEntry, CompatibilityService",
+      "acceptance_criteria": [
+        "Models match PRD section 6, with @@map to snake_case table names, BigInt autoincrement ids, @db.VarChar sizes and Timestamptz timestamps",
+        "@@unique([make, model, year]) on Vehicle; @@unique([vehicleId, categoryId, partNumber]) on CompatibilityEntry for exact-match lookup",
+        "CompatibilityService has a composite @@id([entryId, serviceId]); Service.priceTier is a relation to PriceTier.tierCode",
+        "EntrySource enum (import, admin_confirmed); amountCents is Int",
+        "prisma migrate dev creates the migration without errors"
+      ],
+      "dependencies": [
+        "TASK-002"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-004",
+      "phase": 0,
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Prisma models and migration for orders: Order, OrderPhoto, OrderAnswer, OrderStatusHistory",
+      "acceptance_criteria": [
+        "Order has every field from PRD section 6, plus returnTrackingNo (for email #4), paymentLinkUrl and a unique idempotencyKey (blocks duplicate submits)",
+        "OrderStatus enum with the 7 statuses; PhotoType enum (sticker, donor, original)",
+        "trackingToken is @unique; indexes on status, customerEmail, partNumberEntered and createdAt",
+        "Price snapshot fields are Int? in cents, null until the order is matched"
+      ],
+      "dependencies": [
+        "TASK-003"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-005",
+      "phase": 0,
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Prisma models and migration for support tables: AppSetting, QuestionDefinition, StripeEvent, EmailLog",
+      "acceptance_criteria": [
+        "AppSetting (key/value) holds return_shipping_fee_cents",
+        "QuestionDefinition: questionSetCode, questionCode, label, answerType enum (text, yes_no, textarea, photo), required, sortOrder; unique (questionSetCode, questionCode)",
+        "StripeEvent uses the Stripe event id as primary key (webhook idempotency)",
+        "EmailLog stores orderId, emailType, status, error and sentAt, with a unique (orderId, emailType) so each email is sent only once"
+      ],
+      "dependencies": [
+        "TASK-004"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-006",
+      "phase": 0,
+      "category": "security",
+      "priority": "critical",
+      "description": "Block the Supabase Data API from reading app tables",
+      "acceptance_criteria": [
+        "A SQL migration enables Row Level Security on every app table, with no policies, so the anon and authenticated keys cannot read or write them through PostgREST",
+        "All data access goes through Prisma on the server (the connection role bypasses RLS); the Supabase client is used only for auth",
+        "The Supabase service role key is used only in server code and never exposed through a NEXT_PUBLIC_ variable"
+      ],
+      "dependencies": [
+        "TASK-005"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-007",
+      "phase": 0,
+      "category": "functional",
+      "priority": "high",
+      "description": "Prisma seed script for reference data plus optional sample compatibility data",
+      "acceptance_criteria": [
+        "prisma/seed.ts is idempotent (upsert) and registered in package.json",
+        "Seeds the 5 module categories, tiers 100/200/300/400, services with questionSetCode, the return shipping fee, and the SRS, CLONING, VIN_WRITE, RESTORATION and FOLLOW_UP question sets from PRD 4.4",
+        "Sample compatibility entries (a few makes and categories, one entry with zero services) are inserted only when SEED_SAMPLE=true"
+      ],
+      "dependencies": [
+        "TASK-005"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-008",
+      "phase": 0,
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Connect the Vercel project and deploy a hello-world build",
+      "acceptance_criteria": [
+        "The repo is connected to Vercel; main deploys to production and branches get preview deployments",
+        "Env vars are set in Vercel for Production and Preview; a Vercel Blob store is linked to the project",
+        "The build runs prisma migrate deploy before next build (production only)",
+        "The production URL renders the home page and a server-rendered DB read succeeds"
+      ],
+      "dependencies": [
+        "TASK-006"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-009",
+      "phase": 1,
+      "category": "functional",
+      "priority": "critical",
+      "description": "Domain rules: status transitions and the tracking token (/lib/domain)",
+      "acceptance_criteria": [
+        "/lib/domain/status.ts exports the allowed-transitions map (pending_review → awaiting_payment → payment_received → block_received → in_progress → ready_shipped_back → completed), canTransition() and nextStatuses()",
+        "/lib/domain/token.ts generates a tracking token from 32 random bytes (crypto.randomBytes), base64url-encoded",
+        "Status labels and colors for the UI are in /lib/constants.ts",
+        "No Prisma, Next.js or Stripe imports in /lib/domain"
+      ],
+      "dependencies": [
+        "TASK-001"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-010",
+      "phase": 1,
+      "category": "functional",
+      "priority": "critical",
+      "description": "Domain rules: part number normalization, compatibility decision and price quote",
+      "acceptance_criteria": [
+        "normalizePartNumber() does trim + uppercase only; there is never fuzzy matching",
+        "decideMatch(entry, services) returns matched only when the entry exists and has at least one linked service",
+        "quote(tierAmountCents, returnFeeCents) returns {servicePriceCents, returnShippingFeeCents, totalCents}",
+        "Pure functions with no framework imports"
+      ],
+      "dependencies": [
+        "TASK-001"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-011",
+      "phase": 1,
+      "category": "functional",
+      "priority": "critical",
+      "description": "Order status service: the single place that changes orders.status",
+      "acceptance_criteria": [
+        "/lib/services/order-status.ts exports advanceOrderStatus(orderId, to, changedBy, extra?), which validates the transition with /lib/domain/status and updates the order plus a history row in one Prisma transaction",
+        "After the commit it runs registered side effects keyed by target status (the payment-link and email tasks plug in here); a failed side effect is logged and never rolls back the status",
+        "A codebase search shows no other code writing order.status"
+      ],
+      "dependencies": [
+        "TASK-009",
+        "TASK-004"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-012",
+      "phase": 1,
+      "category": "security",
+      "priority": "critical",
+      "description": "Supabase Auth for the admin: SSR clients, middleware, login and logout, requireAdmin helper",
+      "acceptance_criteria": [
+        "@supabase/ssr server and browser clients live in /lib/supabase",
+        "middleware.ts refreshes the session and redirects any /admin/* request (except /admin/login) to login when there is no user",
+        "The /admin/login page (shadcn form) signs in with email/password; a logout action signs out",
+        "requireAdmin() is callable from Server Actions and Route Handlers and throws when there is no session",
+        "Public sign-ups are disabled in Supabase; README explains creating the admin in the Supabase dashboard"
+      ],
+      "dependencies": [
+        "TASK-001"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-013",
+      "phase": 1,
+      "category": "ui",
+      "priority": "high",
+      "description": "Admin layout shell",
+      "acceptance_criteria": [
+        "app/admin/layout.tsx checks the session server-side and renders the navigation: Orders, Review Queue, Compatibility, Pricing, plus Log out",
+        "Placeholder pages exist for each nav item; the layout is responsive (collapsible nav on mobile)"
+      ],
+      "dependencies": [
+        "TASK-012"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-014",
+      "phase": 2,
+      "category": "security",
+      "priority": "critical",
+      "description": "Vercel Blob upload token Route Handler with server-side validation",
+      "acceptance_criteria": [
+        "app/api/uploads/token/route.ts uses handleUpload from @vercel/blob/client",
+        "onBeforeGenerateToken sets allowedContentTypes (image/jpeg, image/png, image/heic, image/webp; plus application/pdf for labels), maximumSizeInBytes (10 MB) and addRandomSuffix: true",
+        "Purpose comes from the client payload: 'wizard' is allowed publicly under the pending/ path prefix; 'label' requires requireAdmin()",
+        "The client never gets a general-purpose token; uploaded URLs are validated server-side as Vercel Blob URLs before they are saved to the database"
+      ],
+      "dependencies": [
+        "TASK-012",
+        "TASK-008"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-015",
+      "phase": 2,
+      "category": "ui",
+      "priority": "critical",
+      "description": "Wizard shell: shared state, step indicator and layout for /order/*",
+      "acceptance_criteria": [
+        "A client-side wizard store (React context or zustand) persisted to sessionStorage holds vehicle, category, partNumber, sticker upload, match result, service, answers and contact details",
+        "The StepIndicator component in /components/wizard shows the steps and the current one",
+        "app/(public)/order/layout.tsx renders the indicator; the landing page links to /order/vehicle",
+        "Mobile-first layout"
+      ],
+      "dependencies": [
+        "TASK-001"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-016",
+      "phase": 2,
+      "category": "ui",
+      "priority": "critical",
+      "description": "/order/vehicle — cascading Make → Model → Year selection",
+      "acceptance_criteria": [
+        "The page (a Server Component) loads makes that have at least one compatibility entry",
+        "Server Actions getModels(make) and getYears(make, model) return only values with entries; selecting a parent resets its children",
+        "Next is disabled until make, model and year are all chosen"
+      ],
+      "dependencies": [
+        "TASK-015",
+        "TASK-007"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-017",
+      "phase": 2,
+      "category": "ui",
+      "priority": "critical",
+      "description": "/order/module — module category selection",
+      "acceptance_criteria": [
+        "The 5 categories render as selectable cards with icons",
+        "Next is disabled until a category is chosen"
+      ],
+      "dependencies": [
+        "TASK-016"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-018",
+      "phase": 2,
+      "category": "functional",
+      "priority": "critical",
+      "description": "/order/compatibility — Part Number, sticker photo upload and the checkCompatibility Server Action",
+      "acceptance_criteria": [
+        "Part Number is required, with helper text that it is the catalog number, not the serial number; a reference sticker image sits next to the upload",
+        "The FileUpload component in /components/wizard uploads directly to Blob through the token route, shows a preview and progress, and blocks Continue until the upload completes",
+        "checkCompatibility (zod-validated) returns {matched, entryId, services: [{id, name, priceCents}]} computed with /lib/domain",
+        "Match → /order/service. No match → a notice that the part will be reviewed manually, then /order/details with service selection skipped"
+      ],
+      "dependencies": [
+        "TASK-017",
+        "TASK-010",
+        "TASK-014"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-019",
+      "phase": 2,
+      "category": "ui",
+      "priority": "critical",
+      "description": "/order/service — pick one confirmed service",
+      "acceptance_criteria": [
+        "Shows only the services from the match result, as radio cards with name and formatted price",
+        "Exactly one can be chosen; Next is disabled until one is selected"
+      ],
+      "dependencies": [
+        "TASK-018"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-020",
+      "phase": 2,
+      "category": "ui",
+      "priority": "high",
+      "description": "/order/details — required description plus the data-driven dynamic questions",
+      "acceptance_criteria": [
+        "The description textarea is always required",
+        "The getQuestions(serviceId) Server Action returns the service's question set, plus FOLLOW_UP when applicable",
+        "One DynamicQuestion component renders the text, yes_no, textarea and photo types; photo answers (cloning: original and donor) use FileUpload",
+        "Required questions show inline errors and block Next; the pending-review path shows only the description"
+      ],
+      "dependencies": [
+        "TASK-019"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-021",
+      "phase": 2,
+      "category": "ui",
+      "priority": "critical",
+      "description": "/order/shipping — contact details, return address and order review",
+      "acceptance_criteria": [
+        "shadcn Form + react-hook-form + zod: name, email, phone, street, city, state (default HI), ZIP (US format) — all required",
+        "The review section shows every entered value with Edit links. Matched orders show service price + return shipping = total from a getQuote Server Action; pending-review orders say the price will be confirmed after review",
+        "States that inbound shipping is free, and that no payment is taken now because the Stripe link arrives by email"
+      ],
+      "dependencies": [
+        "TASK-020"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-022",
+      "phase": 2,
+      "category": "functional",
+      "priority": "critical",
+      "description": "placeOrder Server Action — the matched path and the pending-review path",
+      "acceptance_criteria": [
+        "Validates the full payload with zod, including the required answers for the service's question set and that photo URLs are from Blob",
+        "Re-runs the compatibility check on the server; the client's match result is ignored",
+        "Matched: snapshots the quote and creates the order, then calls advanceOrderStatus to awaiting_payment. Not matched: creates it as pending_review with service, matched entry and prices null",
+        "Order, photos, answers and the first history row are written in one prisma.$transaction",
+        "The idempotency key is generated once per wizard session; a repeat submit returns the existing order. Returns {orderNumber, trackingToken, status}"
+      ],
+      "dependencies": [
+        "TASK-021",
+        "TASK-011",
+        "TASK-010"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-023",
+      "phase": 2,
+      "category": "ui",
+      "priority": "high",
+      "description": "/order/confirmation — screen after submit",
+      "acceptance_criteria": [
+        "Shows the order number and a copyable tracking link (/track/[token])",
+        "Text differs by path: 'check your email for the payment link' (matched) or 'your part is being reviewed' (pending review)",
+        "Cloning orders list in plain language which modules to ship",
+        "Wizard state is cleared from sessionStorage"
+      ],
+      "dependencies": [
+        "TASK-022"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-024",
+      "phase": 2,
+      "category": "security",
+      "priority": "high",
+      "description": "Wizard step guards",
+      "acceptance_criteria": [
+        "Each step redirects to the first incomplete step when earlier wizard state is missing",
+        "/order/service redirects to /order/compatibility unless the store holds a successful match",
+        "Deep-linking or using browser back/forward never shows a step with inconsistent state"
+      ],
+      "dependencies": [
+        "TASK-023"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-025",
+      "phase": 3,
+      "category": "integration",
+      "priority": "critical",
+      "description": "Stripe client wrapper and createPaymentLink",
+      "acceptance_criteria": [
+        "/lib/stripe.ts exports a server-only Stripe client using STRIPE_SECRET_KEY",
+        "createPaymentLink(order) creates a Payment Link with two USD line items (service, return shipping) built from the order's cent snapshots, with metadata orderId and trackingToken, and after_completion redirecting to /track/[token]",
+        "Test mode and live mode are selected only by the key"
+      ],
+      "dependencies": [
+        "TASK-001"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-026",
+      "phase": 3,
+      "category": "functional",
+      "priority": "critical",
+      "description": "Payment gate: create the payment link when an order enters awaiting_payment",
+      "acceptance_criteria": [
+        "Registered as the awaiting_payment side effect in the order status service",
+        "Refuses orders that are not in awaiting_payment or have no price snapshot",
+        "Saves stripePaymentLinkId and paymentLinkUrl; if a link already exists it is reused, never duplicated",
+        "A regeneratePaymentLink admin action (requireAdmin) retries after a Stripe failure"
+      ],
+      "dependencies": [
+        "TASK-025",
+        "TASK-011"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-027",
+      "phase": 3,
+      "category": "security",
+      "priority": "critical",
+      "description": "Stripe webhook Route Handler",
+      "acceptance_criteria": [
+        "app/api/webhooks/stripe/route.ts reads the raw body (await req.text()) and verifies it with stripe.webhooks.constructEvent and STRIPE_WEBHOOK_SECRET; an invalid signature returns 400",
+        "Inserts the event id into StripeEvent first; a duplicate returns 200 with no side effects",
+        "checkout.session.completed with metadata.orderId sets stripePaymentStatus and calls advanceOrderStatus to payment_received with changedBy 'system'",
+        "Unknown events return 200 and are ignored; the route runs on the Node.js runtime"
+      ],
+      "dependencies": [
+        "TASK-026"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-028",
+      "phase": 3,
+      "category": "ui",
+      "priority": "critical",
+      "description": "/track/[token] — public tracking page",
+      "acceptance_criteria": [
+        "A Server Component looks up the order only by token and shows the order number, vehicle, module, service, totals and a status timeline of all stages with dates from the history",
+        "No email, phone, address or photos are shown",
+        "An unknown token renders notFound() with a generic message",
+        "An unpaid order in awaiting_payment shows a Pay now button linking to paymentLinkUrl"
+      ],
+      "dependencies": [
+        "TASK-022"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-029",
+      "phase": 3,
+      "category": "ui",
+      "priority": "high",
+      "description": "Post-payment materials on the tracking page: packing instructions, printable order slip, return label",
+      "acceptance_criteria": [
+        "Shown only when status is payment_received or later",
+        "/track/[token]/slip has print CSS and shows the order number, modules to ship and the shop address, with a Print button",
+        "The label download link appears only when shippingLabelUrl is set"
+      ],
+      "dependencies": [
+        "TASK-028"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-030",
+      "phase": 3,
+      "category": "ui",
+      "priority": "critical",
+      "description": "/admin/orders — filterable orders table",
+      "acceptance_criteria": [
+        "A Server Component reads filters from searchParams (status, q for order number/email/part number, dateFrom, dateTo, page) and queries Prisma with pagination, newest first",
+        "Client filter controls update the URL; the shadcn Table shows status badges and totals",
+        "Clicking a row opens /admin/orders/[id]"
+      ],
+      "dependencies": [
+        "TASK-013",
+        "TASK-004"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-031",
+      "phase": 3,
+      "category": "ui",
+      "priority": "critical",
+      "description": "/admin/orders/[id] — order detail",
+      "acceptance_criteria": [
+        "Shows vehicle, module, part number, service, answers (labeled with the question text), contacts and address, price breakdown, Stripe status and link, and the status history timeline",
+        "Photos render as thumbnails with a Dialog lightbox",
+        "Shows a Regenerate payment link button when an awaiting_payment order has no link"
+      ],
+      "dependencies": [
+        "TASK-030",
+        "TASK-026"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-032",
+      "phase": 3,
+      "category": "functional",
+      "priority": "critical",
+      "description": "Admin manual status update",
+      "acceptance_criteria": [
+        "An updateOrderStatus Server Action (requireAdmin, zod) calls advanceOrderStatus with the admin's email as changedBy",
+        "The select on the detail page offers only nextStatuses(); pending_review → awaiting_payment is never offered here",
+        "Moving to ready_shipped_back shows an optional return tracking number field",
+        "Includes a confirm dialog, a toast on success and a refreshed history (revalidatePath)"
+      ],
+      "dependencies": [
+        "TASK-031",
+        "TASK-011"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-033",
+      "phase": 3,
+      "category": "functional",
+      "priority": "medium",
+      "description": "Admin return label upload, replace and remove",
+      "acceptance_criteria": [
+        "The detail page uploads a pdf or image through the token route with purpose 'label' (admin-only)",
+        "setShippingLabel and removeShippingLabel Server Actions (requireAdmin) update shippingLabelUrl; replacing deletes the old blob with del()",
+        "The label then appears on the tracking page"
+      ],
+      "dependencies": [
+        "TASK-031",
+        "TASK-014"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-034",
+      "phase": 3,
+      "category": "ui",
+      "priority": "medium",
+      "description": "Admin customer history by email",
+      "acceptance_criteria": [
+        "The customer email on the detail page links to /admin/orders?email=…",
+        "The orders page supports an exact, case-insensitive email filter and shows order count and total paid for that email"
+      ],
+      "dependencies": [
+        "TASK-030"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-035",
+      "phase": 3,
+      "category": "ui",
+      "priority": "critical",
+      "description": "/admin/review-queue — pending_review worklist",
+      "acceptance_criteria": [
+        "Lists pending_review orders oldest first as cards (ReviewQueueCard) with sticker photo, part number, vehicle, category and description",
+        "The admin nav shows a badge with the pending count, loaded server-side in the layout"
+      ],
+      "dependencies": [
+        "TASK-031"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "TASK-036",
+      "phase": 3,
+      "category": "functional",
+      "priority": "critical",
+      "description": "confirmCompatibility Server Action",
+      "acceptance_criteria": [
+        "requireAdmin plus zod: orderId, supportedServiceIds[] (services of the order's category) and selectedServiceId, which must be one of the supported ones",
+        "In one transaction: upsert the CompatibilityEntry (source admin_confirmed), replace its service links, set matchedEntryId and serviceId, and snapshot the quote",
+        "Then calls advanceOrderStatus to awaiting_payment, which triggers the payment link",
+        "Rejects orders not in pending_review; this is the only path from pending_review to awaiting_payment. The next order with the same part number matches automatically"
+      ],
+      "dependencies": [
+        "TASK-026",
+        "TASK-010"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-037",
+      "phase": 3,
+      "category": "ui",
+      "priority": "critical",
+      "description": "Confirm-compatibility dialog in the review queue",
+      "acceptance_criteria": [
+        "A card opens a Dialog with the enlarged photo, part number and vehicle",
+        "Checkboxes select the supported services of the category; a select picks this order's service from the checked ones",
+        "Submit calls confirmCompatibility, shows errors inline, and on success closes, shows a toast and revalidates the queue and badge"
+      ],
+      "dependencies": [
+        "TASK-035",
+        "TASK-036"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-038",
+      "phase": 3,
+      "category": "ui",
+      "priority": "high",
+      "description": "/admin/compatibility — read-only searchable compatibility database",
+      "acceptance_criteria": [
+        "Server-side search by part number and filters on make, category and source, via searchParams, with pagination",
+        "The table shows Make, Model, Year, Category, Part Number, services (badges) and source"
+      ],
+      "dependencies": [
+        "TASK-013",
+        "TASK-003"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-039",
+      "phase": 3,
+      "category": "functional",
+      "priority": "high",
+      "description": "Excel/CSV import Server Actions: preview and apply",
+      "acceptance_criteria": [
+        "Accepts both .xlsx (via xlsx/exceljs) and .csv (via papaparse); the canonical Excel column format is: Make, Model, Year, Category (must match a seeded category name), Part Number, and one column per service name (value '1' or 'x' = supported, empty = not)",
+        "previewImport(file) (requireAdmin) parses the file and returns valid rows and error rows with reasons (unknown category, unknown service column, empty part number, invalid year) without writing anything",
+        "applyImport(rows) re-validates on the server, then upserts vehicles, entries (source import) and service links in batched transactions without duplicates, and returns counts of added, updated and skipped",
+        "Column matching is case-insensitive and trims whitespace; unknown extra columns are ignored with a warning"
+      ],
+      "dependencies": [
+        "TASK-012",
+        "TASK-007",
+        "TASK-010"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-040",
+      "phase": 3,
+      "category": "ui",
+      "priority": "high",
+      "description": "Excel/CSV import screen with preview",
+      "acceptance_criteria": [
+        "/admin/compatibility/import has a file picker (accepts .xlsx and .csv), a preview table with error rows highlighted and their reasons, and an Apply button enabled only when valid rows exist",
+        "Shows the result counts after apply and revalidates the compatibility list"
+      ],
+      "dependencies": [
+        "TASK-038",
+        "TASK-039"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-041",
+      "phase": 4,
+      "category": "integration",
+      "priority": "high",
+      "description": "Resend setup, email templates and the send helper",
+      "acceptance_criteria": [
+        "/lib/email/send.ts wraps the Resend SDK: sendOrderEmail(orderId, type) renders the template, sends it, and records the result in EmailLog; the unique (orderId, emailType) key prevents duplicates",
+        "The 5 PRD emails are React Email (or plain TSX) templates in /lib/email/templates",
+        "Sending happens after the DB commit; a failure is logged and never breaks the user action"
+      ],
+      "dependencies": [
+        "TASK-005",
+        "TASK-001"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-042",
+      "phase": 4,
+      "category": "integration",
+      "priority": "high",
+      "description": "Emails #1 (customer: order submitted) and #5 (admin: new order)",
+      "acceptance_criteria": [
+        "Both are sent from placeOrder after a successful commit, for both paths",
+        "#1 has the order number, tracking link and next steps specific to the path",
+        "#5 goes to ADMIN_NOTIFICATION_EMAIL with the order number, contact details, part number, sticker photo and a link to /admin/orders/[id]"
+      ],
+      "dependencies": [
+        "TASK-041",
+        "TASK-022"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-043",
+      "phase": 4,
+      "category": "integration",
+      "priority": "high",
+      "description": "Emails #2 (payment link), #3 (module received) and #4 (ready / shipped back)",
+      "acceptance_criteria": [
+        "#2 is sent right after the payment link is saved, with the order summary, price breakdown and link",
+        "#3 is registered as the block_received side effect; #4 as the ready_shipped_back side effect, including returnTrackingNo if set",
+        "No email for payment_received, in_progress or completed"
+      ],
+      "dependencies": [
+        "TASK-041",
+        "TASK-026"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-044",
+      "phase": 4,
+      "category": "ui",
+      "priority": "high",
+      "description": "/admin/pricing — tier amounts, service-to-tier mapping and return shipping fee",
+      "acceptance_criteria": [
+        "Server Actions (requireAdmin, zod) updateTierAmount, setServiceTier and setReturnShippingFee, with validation (amount > 0, fee between $20 and $30)",
+        "The page edits values in dollars and stores cents; a toast confirms each save",
+        "Only new quotes are affected; existing order snapshots stay unchanged"
+      ],
+      "dependencies": [
+        "TASK-013",
+        "TASK-010"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-045",
+      "phase": 4,
+      "category": "security",
+      "priority": "high",
+      "description": "Security pass before launch",
+      "acceptance_criteria": [
+        "Every admin Server Action calls requireAdmin() itself, not only through middleware, because Server Actions are publicly reachable endpoints",
+        "Security headers are set in next.config (HSTS, X-Content-Type-Options, Referrer-Policy, frame-ancestors 'none')",
+        "Vercel Firewall rate-limit rules cover the public Server Actions (checkCompatibility, placeOrder), the upload token route and /track/*",
+        "No PII, tokens or secrets in logs or error messages; all server-only modules import 'server-only'"
+      ],
+      "dependencies": [
+        "TASK-022",
+        "TASK-027",
+        "TASK-037",
+        "TASK-044"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-046",
+      "phase": 5,
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Production launch configuration",
+      "acceptance_criteria": [
+        "The custom domain is added in Vercel and NEXT_PUBLIC_SITE_URL points to it",
+        "Live Stripe keys and the webhook secret are set; the production webhook endpoint is registered in Stripe for checkout.session.completed",
+        "The Resend sending domain is verified (SPF/DKIM)",
+        "The Supabase plan is chosen with backups enabled (a paid tier for daily backups), and the decision is recorded in README",
+        "The real compatibility dataset is imported through the admin Excel import; no sample seed data in production"
+      ],
+      "dependencies": [
+        "TASK-027",
+        "TASK-040",
+        "TASK-042",
+        "TASK-043",
+        "TASK-045"
+      ],
+      "status": "pending"
+    }
+  ]
+}
