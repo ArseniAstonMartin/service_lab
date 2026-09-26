@@ -1612,4 +1612,9 @@ still depends on TASK-028.
 - No new send/render/dedup logic needed — `sendOrderEmail` (TASK-041) already re-reads the order fresh from the DB and is idempotent per `(orderId, emailType)`, so retried/duplicate side-effect invocations (e.g. an admin correcting a status twice) can't double-send.
 - Verified with `tsc --noEmit` and a full `next build` — both clean.
 - **Next up:** TASK-044 (pricing admin screen) is the remaining unblocked `high` pick.
+
+## 2026-09-26 — TASK-044: /admin/pricing — tiers, service mapping, return shipping fee
+- `/admin/pricing` now edits the live catalog: `updateTierAmount`, `setServiceTier`, and `setReturnShippingFee` (each `requireAdmin()` + zod) convert dollar inputs to cents, reject amount ≤ 0 and a fee outside $20–$30, and write only `PriceTier` / `Service.tierCode` / `AppSetting` — existing order snapshots are never touched. Each save shows a toast.
+- Verified with `tsc --noEmit`, a full `next build` (`/admin/pricing` is now a real 4.25 kB route), and an unauthenticated browser visit that redirects to `/admin/login`. Could not click through the form itself — no admin credentials in this session.
+- **Next up:** TASK-045 (security pass) is the remaining unblocked `high` pick before launch (TASK-046).
  
