@@ -22,7 +22,8 @@ export class UnauthorizedError extends Error {
  * are independently reachable HTTP endpoints — middleware's page-level
  * redirect does not protect them. Per TASK-045, every admin Server
  * Action and Route Handler must call requireAdmin() itself; this is the
- * one place that check is implemented.
+ * one place that check is implemented. TASK-045 audited every admin
+ * Server Action and the label-upload token route against that rule.
  *
  * Returns the authenticated Supabase user, or throws UnauthorizedError.
  */

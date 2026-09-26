@@ -1,9 +1,11 @@
 "use server";
 
+import "server-only";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/supabase/require-admin";
 import { ensurePaymentLink, PaymentLinkIneligibleError } from "@/lib/services/payment";
+import { logServerError } from "@/lib/log";
 
 const regeneratePaymentLinkSchema = z.object({
   orderId: z.string().min(1),
@@ -59,7 +61,7 @@ export async function regeneratePaymentLink(orderId: string): Promise<{ paymentL
     // A real Stripe API failure (network, invalid key, rate limit, ...).
     // Never leak the raw Stripe error message to the client — log it
     // server-side and surface a generic, actionable message instead.
-    console.error(`[regeneratePaymentLink] Stripe call failed for order ${id}:`, error);
+    logServerError(`[regeneratePaymentLink] Stripe call failed for order ${id.toString()}`, error);
     throw new Error("Failed to create a Stripe payment link. Please try again.");
   }
 }

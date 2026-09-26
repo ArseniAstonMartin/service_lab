@@ -1,9 +1,11 @@
+import "server-only";
 import { NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { Prisma } from "@prisma/client";
 import { stripe } from "@/lib/stripe";
 import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
+import { logServerError } from "@/lib/log";
 import { advanceOrderStatus, InvalidStatusTransitionError } from "@/lib/services/order-status";
 
 /**
@@ -51,7 +53,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   try {
     event = stripe.webhooks.constructEvent(rawBody, signature, env.STRIPE_WEBHOOK_SECRET);
   } catch (error) {
-    console.error("[stripe webhook] signature verification failed:", error);
+    logServerError("[stripe webhook] signature verification failed", error);
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
 
@@ -93,7 +95,7 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session):
     id = BigInt(orderId);
   } catch {
     console.error(
-      `[stripe webhook] checkout.session.completed ${session.id} has an invalid metadata.orderId "${orderId}"`,
+      `[stripe webhook] checkout.session.completed ${session.id} has an invalid metadata.orderId`,
     );
     return;
   }
@@ -113,8 +115,8 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session):
       // other way in the meantime. Not a failure of this webhook.
       console.warn(`[stripe webhook] ignoring ${session.id}: ${error.message}`);
     } else {
-      console.error(
-        `[stripe webhook] failed to advance order ${id} to payment_received:`,
+      logServerError(
+        `[stripe webhook] failed to advance order ${id.toString()} to payment_received`,
         error,
       );
     }

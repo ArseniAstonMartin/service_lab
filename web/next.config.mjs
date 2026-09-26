@@ -20,6 +20,25 @@ const nextConfig = {
       bodySizeLimit: "10mb",
     },
   },
+  async headers() {
+    // TASK-045: apply these on every response. frame-ancestors lives on
+    // CSP (there is no standalone header for it); HSTS is ignored by
+    // browsers on localhost and takes effect on the HTTPS production host.
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          {
+            key: "Strict-Transport-Security",
+            value: "max-age=63072000; includeSubDomains; preload",
+          },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

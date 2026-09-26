@@ -1,5 +1,6 @@
 "use server";
 
+import "server-only";
 import { z } from "zod";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";

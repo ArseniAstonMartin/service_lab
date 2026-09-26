@@ -2,6 +2,7 @@ import "server-only";
 import type { Order, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { canTransition, type OrderStatusValue } from "@/lib/domain/status";
+import { logServerError } from "@/lib/log";
 
 /**
  * The order status service: the single place in the codebase allowed to
@@ -94,8 +95,8 @@ export async function advanceOrderStatus(
     try {
       await effect(updatedOrder);
     } catch (error) {
-      console.error(
-        `[order-status] side effect for status "${to}" failed for order ${orderId}:`,
+      logServerError(
+        `[order-status] side effect for status "${to}" failed for order ${orderId.toString()}`,
         error,
       );
     }

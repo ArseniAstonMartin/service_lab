@@ -1,3 +1,4 @@
+import "server-only";
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { NextResponse } from "next/server";
 import { UnauthorizedError, requireAdmin } from "@/lib/supabase/require-admin";

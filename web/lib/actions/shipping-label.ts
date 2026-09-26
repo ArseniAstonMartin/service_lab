@@ -1,11 +1,13 @@
 "use server";
 
+import "server-only";
 import { z } from "zod";
 import { del } from "@vercel/blob";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/supabase/require-admin";
 import { isVercelBlobUrl } from "@/lib/blob";
+import { logServerError } from "@/lib/log";
 
 /**
  * Admin return-label upload/replace/remove (TASK-033). The upload
@@ -40,7 +42,7 @@ async function deleteBlobBestEffort(url: string): Promise<void> {
   try {
     await del(url);
   } catch (error) {
-    console.error(`Failed to delete shipping label blob ${url}:`, error);
+    logServerError("Failed to delete a shipping label blob", error);
   }
 }
 

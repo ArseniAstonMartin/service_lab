@@ -1,5 +1,6 @@
 "use server";
 
+import "server-only";
 import { z } from "zod";
 import type { OrderStatus, PhotoType } from "@prisma/client";
 import { prisma } from "@/lib/db";

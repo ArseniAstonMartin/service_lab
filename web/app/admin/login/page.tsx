@@ -34,11 +34,11 @@ export default async function AdminLoginPage({
                 required
               />
             </div>
-            {error && (
+            {error ? (
               <p className="text-sm text-destructive" role="alert">
-                {error}
+                Invalid email or password.
               </p>
-            )}
+            ) : null}
             <Button type="submit" className="w-full">
               Sign in
             </Button>

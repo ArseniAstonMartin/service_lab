@@ -1617,4 +1617,10 @@ still depends on TASK-028.
 - `/admin/pricing` now edits the live catalog: `updateTierAmount`, `setServiceTier`, and `setReturnShippingFee` (each `requireAdmin()` + zod) convert dollar inputs to cents, reject amount ≤ 0 and a fee outside $20–$30, and write only `PriceTier` / `Service.tierCode` / `AppSetting` — existing order snapshots are never touched. Each save shows a toast.
 - Verified with `tsc --noEmit`, a full `next build` (`/admin/pricing` is now a real 4.25 kB route), and an unauthenticated browser visit that redirects to `/admin/login`. Could not click through the form itself — no admin credentials in this session.
 - **Next up:** TASK-045 (security pass) is the remaining unblocked `high` pick before launch (TASK-046).
+
+## 2026-09-26 — TASK-045: Security pass before launch
+- Audited every admin Server Action (`requireAdmin()` already on all of them) and the label-upload token route. Added `import "server-only"` to every Server Action, both Route Handlers, and the other server-only modules that were missing it. Logs now go through `safeErrorMessage` so PII/tokens/secrets are not dumped; login failures no longer echo Supabase errors into the URL.
+- `next.config.mjs` now sets HSTS, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, and `Content-Security-Policy: frame-ancestors 'none'` on every response. `web/firewall.config.json` is the Vercel Firewall rate-limit payload for `checkCompatibility`/`placeOrder`, `/api/uploads/token`, and `/track/*` — this session's Vercel token cannot write the `arseniastonmartins-projects` team scope, so the rules are ready to publish (TASK-046) rather than live yet.
+- Verified with `tsc --noEmit`, `next build`, header checks on `/admin/login`, `/admin/pricing` (307), `/order/vehicle` and `/track/*`, and a browser visit that shows only the generic login error.
+- **Next up:** TASK-046 (production launch) is the last pending task; publish the firewall config when a token with team scope is available.
  

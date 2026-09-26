@@ -1,5 +1,6 @@
 "use server";
 
+import "server-only";
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { EntrySource } from "@prisma/client";

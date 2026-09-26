@@ -3,6 +3,7 @@ import { createElement, type ReactElement } from "react";
 import type { Order, ModuleCategory, OrderPhoto, Service, Vehicle } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
+import { logServerError, safeErrorMessage } from "@/lib/log";
 import { resend } from "@/lib/email/resend-client";
 import {
   OrderSubmittedEmail,
@@ -203,7 +204,7 @@ async function recordEmailLog(
     // the (orderId, emailType) unique constraint. The email itself was
     // already sent/attempted by that point -- not worth failing the
     // caller over a duplicate LOG row.
-    console.error(`EmailLog write raced for order ${orderId.toString()} (${emailType}):`, err);
+    logServerError(`EmailLog write raced for order ${orderId.toString()} (${emailType})`, err);
   }
 }
 
@@ -230,7 +231,7 @@ export async function sendOrderEmail(
   try {
     id = typeof orderId === "bigint" ? orderId : BigInt(orderId);
   } catch {
-    console.error(`sendOrderEmail called with an invalid orderId: ${String(orderId)}`);
+    console.error("sendOrderEmail called with an invalid orderId");
     return { sent: false, skipped: false, error: "Invalid orderId" };
   }
 
@@ -257,8 +258,8 @@ export async function sendOrderEmail(
     await recordEmailLog(id, type, "sent", null);
     return { sent: true };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    console.error(`sendOrderEmail failed for order ${id.toString()} (${type}):`, error);
+    const message = safeErrorMessage(error);
+    logServerError(`sendOrderEmail failed for order ${id.toString()} (${type})`, error);
     await recordEmailLog(id, type, "failed", message);
     return { sent: false, skipped: false, error: message };
   }

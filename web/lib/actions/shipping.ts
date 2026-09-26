@@ -1,5 +1,6 @@
 "use server";
 
+import "server-only";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { quote, type Quote } from "@/lib/domain/quote";

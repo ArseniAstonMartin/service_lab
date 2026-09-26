@@ -1,0 +1,89 @@
+{
+  "firewallEnabled": true,
+  "rules": [
+    {
+      "name": "Rate limit checkCompatibility and placeOrder",
+      "description": "TASK-045: public Server Actions for compatibility lookup and order submit",
+      "active": true,
+      "conditionGroup": [
+        {
+          "conditions": [
+            {
+              "type": "server_action",
+              "op": "inc",
+              "value": ["checkCompatibility", "placeOrder"]
+            }
+          ]
+        }
+      ],
+      "action": {
+        "mitigate": {
+          "action": "rate_limit",
+          "rateLimit": {
+            "algo": "fixed_window",
+            "window": 60,
+            "limit": 20,
+            "keys": ["ip"],
+            "action": "rate_limit"
+          }
+        }
+      }
+    },
+    {
+      "name": "Rate limit upload token route",
+      "description": "TASK-045: /api/uploads/token issues Blob upload tokens",
+      "active": true,
+      "conditionGroup": [
+        {
+          "conditions": [
+            {
+              "type": "path",
+              "op": "eq",
+              "value": "/api/uploads/token"
+            }
+          ]
+        }
+      ],
+      "action": {
+        "mitigate": {
+          "action": "rate_limit",
+          "rateLimit": {
+            "algo": "fixed_window",
+            "window": 60,
+            "limit": 40,
+            "keys": ["ip"],
+            "action": "rate_limit"
+          }
+        }
+      }
+    },
+    {
+      "name": "Rate limit public tracking pages",
+      "description": "TASK-045: /track/* token lookup and packing slip",
+      "active": true,
+      "conditionGroup": [
+        {
+          "conditions": [
+            {
+              "type": "path",
+              "op": "pre",
+              "value": "/track"
+            }
+          ]
+        }
+      ],
+      "action": {
+        "mitigate": {
+          "action": "rate_limit",
+          "rateLimit": {
+            "algo": "fixed_window",
+            "window": 60,
+            "limit": 60,
+            "keys": ["ip"],
+            "action": "rate_limit"
+          }
+        }
+      }
+    }
+  ]
+}

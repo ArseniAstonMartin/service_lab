@@ -1,5 +1,6 @@
 "use server";
 
+import "server-only";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -18,7 +19,9 @@ export async function signIn(formData: FormData): Promise<void> {
   const { error } = await supabase.auth.signInWithPassword({ email, password });
 
   if (error) {
-    redirect(`/admin/login?error=${encodeURIComponent(error.message)}`);
+    // Never echo the Supabase error (or the submitted email) back to
+    // the URL — TASK-045. A generic message is enough for the admin.
+    redirect("/admin/login?error=invalid");
   }
 
   redirect("/admin");
