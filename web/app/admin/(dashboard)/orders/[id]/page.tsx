@@ -7,6 +7,7 @@ import { OrderStatusBadge } from "@/components/admin/order-status-badge";
 import { OrderPhotoGallery } from "@/components/admin/order-photo-gallery";
 import { OrderStatusTimeline } from "@/components/admin/order-status-timeline";
 import { RegeneratePaymentLinkButton } from "@/components/admin/regenerate-payment-link-button";
+import { ShippingLabelUpload } from "@/components/admin/shipping-label-upload";
 import { UpdateStatusControl } from "@/components/admin/update-status-control";
 
 /**
@@ -198,6 +199,15 @@ export default async function AdminOrderDetailPage({
               )}
             </div>
             {showRegenerateButton ? <RegeneratePaymentLinkButton orderId={order.id.toString()} /> : null}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Return shipping label</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ShippingLabelUpload orderId={order.id.toString()} shippingLabelUrl={order.shippingLabelUrl} />
           </CardContent>
         </Card>
       </div>
