@@ -6,6 +6,12 @@ import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/supabase/require-admin";
 import { advanceOrderStatus } from "@/lib/services/order-status";
 import { nextStatuses, ORDER_STATUSES, type OrderStatusValue } from "@/lib/domain/status";
+// Registers the block_received (email #3) and ready_shipped_back (email
+// #4) side effects (TASK-043) at module load time -- this is the only
+// code path that ever moves an order into either of those statuses, so
+// it must be the one to import lib/services/order-emails for its side
+// effect. See that module's docblock for the full rule this satisfies.
+import "@/lib/services/order-emails";
 
 // ORDER_STATUSES is a `readonly OrderStatusValue[]`, not the fixed-length
 // tuple z.enum() wants; it's safe to assert here since the array's actual

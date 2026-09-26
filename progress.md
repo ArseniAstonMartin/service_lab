@@ -1605,4 +1605,11 @@ still depends on TASK-028.
 - Fixed a bundling issue this surfaced: `lib/email/send.ts` statically imported `react-dom/server`, which is fine in isolation (nothing imported it) but fails `next build` ("You're importing a component that imports react-dom/server...") the moment a `"use server"` file (`placeOrder`) pulls it in transitively. Switched to a dynamic `await import("react-dom/server")` inside a small `renderEmailHtml()` helper, which sidesteps Next's static-import check without changing any actual template/rendering behavior.
 - Verified with `tsc --noEmit` and a full `next build` (previously failing on this exact import, now clean).
 - **Next up:** TASK-043 (emails #2/#3/#4 as order-status side effects) is the direct follow-on. TASK-044 (pricing admin) remains the other unblocked `high` pick.
+
+## 2026-09-26 — TASK-043: Emails #2 (payment link), #3 (module received) and #4 (ready/shipped back)
+- Email #2: `lib/services/payment.ts`'s existing `awaiting_payment` side effect now calls `sendOrderEmail(updated.id, "payment_link")` right after `ensurePaymentLink` returns — using the *updated* order (with `paymentLinkUrl` set), not the pre-link one the side effect was invoked with. If Stripe fails, the email call is never reached, so a payment-link email can never go out without a working link.
+- Emails #3/#4: new `lib/services/order-emails.ts` registers `sendOrderEmail(order.id, "module_received")` on `block_received` and `sendOrderEmail(order.id, "ready_shipped_back")` on `ready_shipped_back` (the latter's template already renders `returnTrackingNo` conditionally, from TASK-041). Imported for its registration side effect from `lib/actions/order-status.ts` — the admin manual status-update action, the only code path that ever moves an order into either status. No side effect is registered for `payment_received`, `in_progress`, or `completed`, so no email fires for those.
+- No new send/render/dedup logic needed — `sendOrderEmail` (TASK-041) already re-reads the order fresh from the DB and is idempotent per `(orderId, emailType)`, so retried/duplicate side-effect invocations (e.g. an admin correcting a status twice) can't double-send.
+- Verified with `tsc --noEmit` and a full `next build` — both clean.
+- **Next up:** TASK-044 (pricing admin screen) is the remaining unblocked `high` pick.
  

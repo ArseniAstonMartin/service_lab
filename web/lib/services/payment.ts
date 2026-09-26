@@ -3,6 +3,7 @@ import type { Order } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { createPaymentLink } from "@/lib/stripe";
 import { registerStatusSideEffect } from "@/lib/services/order-status";
+import { sendOrderEmail } from "@/lib/email/send";
 
 /**
  * Thrown when ensurePaymentLink() is asked to create a link for an order
@@ -73,6 +74,15 @@ export async function ensurePaymentLink(order: Order, options?: { force?: boolea
  * TASK-036's confirmCompatibility — this runs automatically right after
  * the status change commits, and creates the order's payment link.
  *
+ * Also sends email #2 (TASK-043), but only AFTER ensurePaymentLink has
+ * actually saved a paymentLinkUrl -- using the order it returns, not the
+ * one this side effect was called with, since that one still has the
+ * pre-link fields. sendOrderEmail re-reads the order from the DB itself
+ * and never throws, so this is safe to call unconditionally here; if
+ * ensurePaymentLink throws first, the email call below is simply never
+ * reached (no email, no link -- consistent, and retryable together via
+ * regeneratePaymentLink).
+ *
  * A thrown error here is caught and logged by advanceOrderStatus itself
  * (see lib/services/order-status.ts) and never rolls back the
  * already-committed status change. The order is simply left with no
@@ -89,5 +99,6 @@ export async function ensurePaymentLink(order: Order, options?: { force?: boolea
  * the same import when it's written.
  */
 registerStatusSideEffect("awaiting_payment", async (order) => {
-  await ensurePaymentLink(order);
+  const updated = await ensurePaymentLink(order);
+  await sendOrderEmail(updated.id, "payment_link");
 });
