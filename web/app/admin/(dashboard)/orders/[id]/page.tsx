@@ -130,7 +130,10 @@ export default async function AdminOrderDetailPage({
             </div>
             <div>
               <span className="text-muted-foreground">Email: </span>
-              <Link href={`/admin/orders?q=${encodeURIComponent(order.customerEmail)}`} className="hover:underline">
+              <Link
+                href={`/admin/orders?email=${encodeURIComponent(order.customerEmail)}`}
+                className="hover:underline"
+              >
                 {order.customerEmail}
               </Link>
             </div>

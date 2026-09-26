@@ -73,10 +73,28 @@ export function OrdersFilterBar() {
   const status = searchParams.get("status") ?? "all";
   const dateFrom = searchParams.get("dateFrom") ?? "";
   const dateTo = searchParams.get("dateTo") ?? "";
-  const hasFilters = Boolean(status !== "all" || q || dateFrom || dateTo);
+  const email = searchParams.get("email") ?? "";
+  const hasFilters = Boolean(status !== "all" || q || dateFrom || dateTo || email);
 
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+      {email ? (
+        <div className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-muted-foreground">Customer</span>
+          <div className="flex h-9 items-center gap-2 rounded-md border bg-muted/50 px-3 text-sm">
+            {email}
+            <button
+              type="button"
+              onClick={() => updateParams({ email: undefined })}
+              className="text-muted-foreground hover:text-foreground"
+              aria-label="Remove customer filter"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <div className="flex flex-col gap-1">
         <label htmlFor="orders-search" className="text-xs font-medium text-muted-foreground">
           Search

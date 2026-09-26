@@ -1,16 +1,24 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { STATUS_LABELS } from "@/lib/constants";
-import type { OrderStatusValue } from "@/lib/domain/status";
+import { ORDER_STATUSES, isPostPaymentStatus, type OrderStatusValue } from "@/lib/domain/status";
+import { formatCents } from "@/lib/format";
 import { OrdersFilterBar } from "@/components/admin/orders-filter-bar";
 import { OrdersTable, type OrderRow } from "@/components/admin/orders-table";
 import { OrdersPagination } from "@/components/admin/orders-pagination";
 
 const PAGE_SIZE = 20;
 
+// Orders in any of these statuses have actually been paid (Stripe has
+// confirmed the checkout) -- the same rule isPostPaymentStatus() applies
+// to a single order, reused here for the customer-history "total paid"
+// summary (TASK-034).
+const PAID_STATUSES = ORDER_STATUSES.filter(isPostPaymentStatus);
+
 type SearchParams = {
   status?: string;
   q?: string;
+  email?: string;
   dateFrom?: string;
   dateTo?: string;
   page?: string;
@@ -40,11 +48,12 @@ export default async function AdminOrdersPage({
 
   const status = isValidStatus(params.status) ? params.status : undefined;
   const q = params.q?.trim() || undefined;
+  const email = params.email?.trim() || undefined;
   const page = parsePage(params.page);
 
-  const where = buildWhere({ status, q, dateFrom: params.dateFrom, dateTo: params.dateTo });
+  const where = buildWhere({ status, q, email, dateFrom: params.dateFrom, dateTo: params.dateTo });
 
-  const [orders, total] = await Promise.all([
+  const [orders, total, emailSummary] = await Promise.all([
     prisma.order.findMany({
       where,
       include: { vehicle: true, category: true, service: true },
@@ -53,6 +62,11 @@ export default async function AdminOrdersPage({
       take: PAGE_SIZE,
     }),
     prisma.order.count({ where }),
+    // The customer-history summary (TASK-034) is intentionally scoped
+    // to ONLY the email filter -- not status/date/q -- so it always
+    // reads "this customer's whole history", regardless of whatever
+    // else the admin has additionally filtered the table by below.
+    email ? getEmailSummary(email) : null,
   ]);
 
   const rows: OrderRow[] = orders.map((order) => ({
@@ -78,6 +92,12 @@ export default async function AdminOrdersPage({
       </div>
 
       <OrdersFilterBar />
+      {emailSummary ? (
+        <div className="rounded-md border bg-muted/30 px-4 py-3 text-sm">
+          <span className="font-medium">{email}</span> — {emailSummary.orderCount} order
+          {emailSummary.orderCount === 1 ? "" : "s"}, {formatCents(emailSummary.totalPaidCents)} total paid
+        </div>
+      ) : null}
       <OrdersTable orders={rows} />
       <OrdersPagination page={page} totalPages={totalPages} />
     </div>
@@ -94,19 +114,48 @@ function parsePage(value: string | undefined): number {
 }
 
 /**
+ * Order count and total paid for one customer email, independent of any
+ * other filter on the page (TASK-034) -- see the call site's comment.
+ * "Paid" means Stripe has actually confirmed the checkout
+ * (payment_received or later, per isPostPaymentStatus); an
+ * awaiting_payment order hasn't paid anything yet even though it has a
+ * price snapshot.
+ */
+async function getEmailSummary(email: string): Promise<{ orderCount: number; totalPaidCents: number }> {
+  const emailWhere: Prisma.OrderWhereInput = { customerEmail: { equals: email, mode: "insensitive" } };
+
+  const [orderCount, paidAggregate] = await Promise.all([
+    prisma.order.count({ where: emailWhere }),
+    prisma.order.aggregate({
+      where: { ...emailWhere, status: { in: PAID_STATUSES } },
+      _sum: { totalAmountCents: true },
+    }),
+  ]);
+
+  return { orderCount, totalPaidCents: paidAggregate._sum.totalAmountCents ?? 0 };
+}
+
+/**
  * `q` matches customer email or the raw part number the customer typed in
  * (case-insensitively), plus an exact order-id match when the whole
  * search string is digits -- lets a support rep paste an order number
  * copied from an email straight into the search box.
+ *
+ * `email`, in contrast, is an EXACT (case-insensitive) match -- the
+ * customer-history link from the order detail page (TASK-034) uses this
+ * instead of `q` so a customer whose email happens to be a substring of
+ * another customer's doesn't pull in the wrong history.
  */
 function buildWhere({
   status,
   q,
+  email,
   dateFrom,
   dateTo,
 }: {
   status?: OrderStatusValue;
   q?: string;
+  email?: string;
   dateFrom?: string;
   dateTo?: string;
 }): Prisma.OrderWhereInput {
@@ -114,6 +163,10 @@ function buildWhere({
 
   if (status) {
     where.status = status;
+  }
+
+  if (email) {
+    where.customerEmail = { equals: email, mode: "insensitive" };
   }
 
   if (q) {
