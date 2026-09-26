@@ -1551,4 +1551,9 @@ still depends on TASK-028.
 ## 2026-09-26 — TASK-028: /track/[token] public tracking page
 - Server Component looks up by tracking token only (Prisma select excludes PII/photos); unknown tokens hit a generic not-found. Shows order number, vehicle, module, service, totals, a 7-stage history timeline, and Pay now when status is awaiting_payment with a paymentLinkUrl.
 - **Next up:** TASK-029 (packing slip / return label on this page, now unblocked). Other critical unblocked picks: TASK-036 confirmCompatibility.
+
+## 2026-09-26 — TASK-029: post-payment packing slip and return label
+- Tracking page shows packing instructions, a printable `/track/[token]/slip`, and a label download only after `payment_received`; unpaid tokens get the same generic not-found on `/slip`.
+- **Next up:** TASK-036 confirmCompatibility (critical; review queue is still read-only without it). TASK-033 (admin label upload) unblocks a real shippingLabelUrl on this page.
+
  

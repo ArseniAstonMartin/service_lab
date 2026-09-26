@@ -57,3 +57,9 @@
     @apply bg-background text-foreground;
   }
 }
+
+@media print {
+  [data-sonner-toaster] {
+    display: none !important;
+  }
+}

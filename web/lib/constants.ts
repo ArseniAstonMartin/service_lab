@@ -30,3 +30,13 @@ export const STATUS_COLORS: Record<OrderStatusValue, string> = {
   ready_shipped_back: "bg-teal-100 text-teal-800 border-teal-200",
   completed: "bg-gray-100 text-gray-800 border-gray-200",
 };
+
+/**
+ * Inbound ship-to printed on the packing slip (TASK-029). The PRD does
+ * not record a street address; replace the locality line with the real
+ * shop street before launch.
+ */
+export const SHOP_SHIPPING_ADDRESS = {
+  name: "ECU Service Lab",
+  locality: "Oahu, Hawaii",
+} as const;

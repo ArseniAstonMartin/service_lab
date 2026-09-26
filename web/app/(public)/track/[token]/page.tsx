@@ -2,6 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { formatCents } from "@/lib/format";
+import { isPostPaymentStatus } from "@/lib/domain/status";
+import { answerByCode, packingItems } from "@/lib/tracking/packing";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { OrderStatusBadge } from "@/components/admin/order-status-badge";
@@ -10,11 +12,13 @@ import { TrackingStatusTimeline } from "@/components/tracking/status-timeline";
 export const dynamic = "force-dynamic";
 
 /**
- * /track/[token] — public order tracking (TASK-028).
+ * /track/[token] — public order tracking (TASK-028) plus post-payment
+ * packing materials (TASK-029).
  *
  * Lookup is by tracking token only (unguessable, not the sequential id).
  * The Prisma select is the allow-list of fields this page may see: no
- * email, phone, address, photos, description, or changedBy.
+ * email, phone, address, photos, description, or changedBy. packing
+ * answers are only the cloning part-number codes, not free-text notes.
  */
 export default async function TrackOrderPage({
   params,
@@ -33,13 +37,16 @@ export default async function TrackOrderPage({
     select: {
       id: true,
       status: true,
+      partNumberEntered: true,
       servicePriceCents: true,
       returnShippingFeeCents: true,
       totalAmountCents: true,
       paymentLinkUrl: true,
+      shippingLabelUrl: true,
       vehicle: { select: { make: true, model: true, year: true } },
       category: { select: { name: true } },
-      service: { select: { name: true } },
+      service: { select: { name: true, questionSetCode: true } },
+      answers: { select: { questionCode: true, answerValue: true } },
       statusHistory: {
         orderBy: { changedAt: "asc" },
         select: { status: true, changedAt: true },
@@ -54,6 +61,14 @@ export default async function TrackOrderPage({
   const vehicleLabel = `${order.vehicle.year} ${order.vehicle.make} ${order.vehicle.model}`;
   const hasPriceSnapshot = order.totalAmountCents != null;
   const showPayNow = order.status === "awaiting_payment" && Boolean(order.paymentLinkUrl);
+  const showShippingMaterials = isPostPaymentStatus(order.status);
+  const items = packingItems({
+    categoryName: order.category.name,
+    partNumber: order.partNumberEntered,
+    questionSetCode: order.service?.questionSetCode ?? null,
+    originalPartNumber: answerByCode(order.answers, "original_part_number"),
+    donorPartNumber: answerByCode(order.answers, "donor_part_number"),
+  });
 
   return (
     <main className="mx-auto flex min-h-screen max-w-2xl flex-col gap-6 p-4 sm:p-6">
@@ -91,6 +106,40 @@ export default async function TrackOrderPage({
           <CardContent className="pt-6 text-sm text-muted-foreground">
             Your payment link is being prepared. Check the email we sent, or refresh this page in
             a minute.
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {showShippingMaterials ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Packing & shipping</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4 text-sm">
+            <div>
+              <p className="font-medium">What to ship</p>
+              <ul className="mt-1 list-inside list-disc text-muted-foreground">
+                {items.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+            <p className="text-muted-foreground">
+              Print the order slip and put it in the box. Inbound shipping to us is free — use any
+              carrier.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button asChild>
+                <Link href={`/track/${trimmed}/slip`}>Printable order slip</Link>
+              </Button>
+              {order.shippingLabelUrl ? (
+                <Button asChild variant="outline">
+                  <a href={order.shippingLabelUrl} rel="noopener noreferrer">
+                    Download shipping label
+                  </a>
+                </Button>
+              ) : null}
+            </div>
           </CardContent>
         </Card>
       ) : null}

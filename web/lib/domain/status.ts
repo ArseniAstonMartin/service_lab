@@ -58,3 +58,10 @@ export function canTransition(from: OrderStatusValue, to: OrderStatusValue): boo
 export function nextStatuses(from: OrderStatusValue): OrderStatusValue[] {
   return [...TRANSITIONS[from]];
 }
+
+const PAYMENT_RECEIVED_INDEX = ORDER_STATUSES.indexOf("payment_received");
+
+/** True once Stripe has marked the order paid (payment_received and after). */
+export function isPostPaymentStatus(status: OrderStatusValue): boolean {
+  return ORDER_STATUSES.indexOf(status) >= PAYMENT_RECEIVED_INDEX;
+}
