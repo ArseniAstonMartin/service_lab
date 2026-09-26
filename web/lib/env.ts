@@ -33,19 +33,57 @@ const envSchema = z.object({
 
 export type Env = z.infer<typeof envSchema>;
 
-function loadEnv(): Env {
-  const parsed = envSchema.safeParse(process.env);
+type EnvKey = keyof Env;
 
-  if (!parsed.success) {
-    const issues = parsed.error.issues
-      .map((issue) => `  - ${issue.path.join(".")}: ${issue.message}`)
+/**
+ * "Fail fast" originally meant "throw the moment this module is
+ * imported" (see TASK-001). That collided with how `next build`
+ * actually works: Next evaluates every route module's top-level code
+ * during "Collecting page data" to introspect its exports, even for a
+ * route nobody is exercising in that build. Any import chain that
+ * touched this file — even just to read one already-configured var —
+ * ran validation for EVERY declared var, so a feature that hasn't been
+ * wired up yet (and genuinely has no key yet, e.g. Resend before any
+ * task sends an email) failed the whole production build.
+ *
+ * This keeps the same schema and the same "throw with a clear message"
+ * behavior, but validates one key at a time, on first access, instead
+ * of all of them at import time. A var that's actually read by code
+ * that's actually running (e.g. STRIPE_SECRET_KEY, read inside
+ * lib/stripe.ts's lazily-constructed client) still fails immediately
+ * and loudly the moment it's needed — it just no longer fails a build
+ * that never needed it in the first place. A var nothing reads yet
+ * (RESEND_API_KEY, SUPABASE_SERVICE_ROLE_KEY, BLOB_READ_WRITE_TOKEN as
+ * of this writing) is simply never validated until some code starts
+ * reading it, which is the point at which it needs to actually be set.
+ */
+function validateKey<K extends EnvKey>(key: K): Env[K] {
+  const shape = envSchema.shape as Record<EnvKey, z.ZodTypeAny>;
+  const result = shape[key].safeParse(process.env[key]);
+
+  if (!result.success) {
+    const issues = result.error.issues
+      .map((issue) => `  - ${key}${issue.path.length ? "." + issue.path.join(".") : ""}: ${issue.message}`)
       .join("\n");
     throw new Error(
-      `Invalid/missing environment variables:\n${issues}\n\nCheck .env.example for the full list.`
+      `Invalid/missing environment variable:\n${issues}\n\nCheck .env.example for the full list.`
     );
   }
 
-  return parsed.data;
+  return result.data as Env[K];
 }
 
-export const env = loadEnv();
+const cache = new Map<EnvKey, unknown>();
+
+export const env: Env = new Proxy({} as Env, {
+  get(_target, prop) {
+    const key = prop as EnvKey;
+    if (!(key in envSchema.shape)) {
+      return undefined;
+    }
+    if (!cache.has(key)) {
+      cache.set(key, validateKey(key));
+    }
+    return cache.get(key);
+  },
+}) as Env;

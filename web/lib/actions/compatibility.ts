@@ -24,6 +24,38 @@ const checkCompatibilitySchema = z.object({
 export type CheckCompatibilityInput = z.infer<typeof checkCompatibilitySchema>;
 
 /**
+ * Client-facing shape of a compatibility check result. Deliberately
+ * distinct from /lib/domain/compatibility's MatchResult: that domain
+ * type's entryId/service.id are typed as the wide EntityId
+ * (string | number | bigint) so the pure domain layer stays agnostic
+ * of how ids are represented, but everything crossing the Server
+ * Action boundary to the client (and into wizard state / sessionStorage,
+ * see lib/wizard/types.ts's WizardMatchResult) must be a plain string —
+ * the same stringify-at-the-boundary convention TASK-017 established
+ * for categoryId. Structurally identical to WizardMatchResult, kept as
+ * its own type here (rather than importing that client type into a
+ * Server Action module) so this module has no dependency on wizard
+ * state's shape.
+ */
+export type CompatibilityMatchResult = {
+  matched: boolean;
+  entryId: string | null;
+  services: { id: string; name: string; priceCents: number }[];
+};
+
+function toClientMatchResult(result: MatchResult): CompatibilityMatchResult {
+  return {
+    matched: result.matched,
+    entryId: result.entryId === null ? null : String(result.entryId),
+    services: result.services.map((service) => ({
+      id: String(service.id),
+      name: service.name,
+      priceCents: service.priceCents,
+    })),
+  };
+}
+
+/**
  * The single source of truth for whether a vehicle/category/part-number
  * combination is a known, confirmed-supported compatibility match.
  *
@@ -34,7 +66,9 @@ export type CheckCompatibilityInput = z.infer<typeof checkCompatibilitySchema>;
  * /lib/domain/compatibility's decideMatch(), which also folds in the
  * "entry exists but has zero linked services" edge case as not matched.
  */
-export async function checkCompatibility(input: CheckCompatibilityInput): Promise<MatchResult> {
+export async function checkCompatibility(
+  input: CheckCompatibilityInput,
+): Promise<CompatibilityMatchResult> {
   const parsed = checkCompatibilitySchema.parse(input);
 
   if (!isVercelBlobUrl(parsed.stickerPhotoUrl)) {
@@ -64,7 +98,7 @@ export async function checkCompatibility(input: CheckCompatibilityInput): Promis
   // wizard only ever offers makes/models/years that exist — but never
   // silently guesses: treat it exactly like "no compatibility entry".
   if (!vehicle) {
-    return decideMatch(null, []);
+    return toClientMatchResult(decideMatch(null, []));
   }
 
   const entry = await prisma.compatibilityEntry.findUnique({
@@ -85,7 +119,7 @@ export async function checkCompatibility(input: CheckCompatibilityInput): Promis
   });
 
   if (!entry) {
-    return decideMatch(null, []);
+    return toClientMatchResult(decideMatch(null, []));
   }
 
   const services = entry.services.map((link) => ({
@@ -94,5 +128,5 @@ export async function checkCompatibility(input: CheckCompatibilityInput): Promis
     priceCents: link.service.priceTier.amountCents,
   }));
 
-  return decideMatch({ id: entry.id.toString() }, services);
+  return toClientMatchResult(decideMatch({ id: entry.id.toString() }, services));
 }
