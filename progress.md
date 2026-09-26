@@ -1623,4 +1623,8 @@ still depends on TASK-028.
 - `next.config.mjs` now sets HSTS, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, and `Content-Security-Policy: frame-ancestors 'none'` on every response. `web/firewall.config.json` is the Vercel Firewall rate-limit payload for `checkCompatibility`/`placeOrder`, `/api/uploads/token`, and `/track/*` — this session's Vercel token cannot write the `arseniastonmartins-projects` team scope, so the rules are ready to publish (TASK-046) rather than live yet.
 - Verified with `tsc --noEmit`, `next build`, header checks on `/admin/login`, `/admin/pricing` (307), `/order/vehicle` and `/track/*`, and a browser visit that shows only the generic login error.
 - **Next up:** TASK-046 (production launch) is the last pending task; publish the firewall config when a token with team scope is available.
+
+## 2026-09-26 — TASK-046: Production launch configuration (in progress)
+- Seed no longer writes sample vehicles/entries when `VERCEL_ENV=production`. README now records the launch decisions: site URL `https://ecu-service-lab.vercel.app`, paid Supabase (Pro or above) required for daily backups (org is still Free), Stripe live keys still needed, Resend domain still unverified, real coverage imported via `/admin/compatibility/import` not `SEED_SAMPLE`.
+- Registered a test-mode Stripe webhook for `checkout.session.completed` on the production URL and stored its signing secret in Vercel. Still blocked on a custom domain, live Stripe keys, a verified Resend sending domain, a paid Supabase upgrade, publishing the WAF rules, and a real import file in the TASK-039 column format.
  

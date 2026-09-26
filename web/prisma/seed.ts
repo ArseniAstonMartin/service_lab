@@ -9,11 +9,13 @@
  *   the services in PRD section 6/8, the return shipping fee AppSetting,
  *   and the SRS / CLONING / VIN_WRITE / RESTORATION / FOLLOW_UP question
  *   sets from PRD section 4.4.
- * - Only when SEED_SAMPLE=true: a few sample vehicles and compatibility
- *   entries (including one entry with zero linked services, to exercise
- *   the "matched but nothing confirmed yet" edge case), source
- *   "admin_confirmed" so they read as hand-entered test data rather than
- *   a real CSV import.
+ * - Only when SEED_SAMPLE=true AND this is not a Vercel production
+ *   build: a few sample vehicles and compatibility entries (including
+ *   one entry with zero linked services, to exercise the "matched but
+ *   nothing confirmed yet" edge case), source "admin_confirmed" so they
+ *   read as hand-entered test data rather than a real CSV import.
+ *   TASK-046: production never gets this sample set — real coverage
+ *   is imported through /admin/compatibility/import.
  *
  * Registered as `prisma.seed` in package.json; run with
  * `npx prisma db seed` (or `npm run db:seed`).
@@ -280,9 +282,12 @@ async function main() {
   await seedQuestionDefinitions();
   await seedAppSettings();
 
-  if (process.env.SEED_SAMPLE === "true") {
+  const allowSample = process.env.SEED_SAMPLE === "true" && process.env.VERCEL_ENV !== "production";
+  if (allowSample) {
     await seedSampleCompatibilityData(categoryIdByName);
     console.log("Seeded reference data + sample compatibility data (SEED_SAMPLE=true).");
+  } else if (process.env.SEED_SAMPLE === "true" && process.env.VERCEL_ENV === "production") {
+    console.log("SEED_SAMPLE is ignored in production (TASK-046). Seeded reference data only.");
   } else {
     console.log("Seeded reference data. Set SEED_SAMPLE=true to also seed sample compatibility data.");
   }

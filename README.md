@@ -76,3 +76,61 @@ npm run dev
 
 `npm run build` must pass before any task is marked `done` — see the
 Project's `tasks.json` `agent_instructions`.
+
+## Production launch
+
+The production Vercel project is `ecu-service-lab`
+(`https://ecu-service-lab.vercel.app`). `NEXT_PUBLIC_SITE_URL` in the
+Production environment is set to that URL. A custom domain is not
+attached yet — when one is added in Vercel, point
+`NEXT_PUBLIC_SITE_URL` at `https://<domain>` and redeploy so payment
+links, tracking links and emails use it.
+
+### Stripe
+
+The webhook Route Handler is `POST /api/webhooks/stripe` and only
+handles `checkout.session.completed`. A **test-mode** endpoint for
+`https://ecu-service-lab.vercel.app/api/webhooks/stripe` is already
+registered on the Hawaii Service Lab Stripe sandbox. Register the same
+URL on the **live** Stripe account before taking real payments, then
+replace `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` in Vercel
+Production with the live values. The sandbox webhook signing secret is
+already stored in Vercel as `STRIPE_WEBHOOK_SECRET`. `STRIPE_SECRET_KEY`
+is still an empty placeholder.
+
+### Email (Resend)
+
+Verify a sending domain in Resend (SPF + DKIM at the DNS host), then
+set `RESEND_FROM_EMAIL` (for example
+`ECU Service Lab <orders@send.example.com>`) and `RESEND_API_KEY` in
+Vercel. Until a domain is verified the app falls back to Resend's
+`onboarding@resend.dev` test sender, which only delivers to the
+account owner.
+
+### Database backups (Supabase)
+
+**Decision:** production requires a paid Supabase plan so automatic
+daily backups are on. The Free tier has no automatic backups and is
+not acceptable once real customer orders live here. Pro (or any paid
+tier that includes daily backups / PITR) is the chosen plan.
+
+The current "Hawaii Service Lab" org (`vsawotguarbbamwcvkew`) is still
+on **Free**. Upgrade it in the Supabase dashboard before taking paid
+orders.
+
+### Compatibility data
+
+`prisma/seed.ts` never writes sample vehicles or entries when
+`VERCEL_ENV=production`, even if `SEED_SAMPLE=true`. Import the real
+dataset through `/admin/compatibility/import` (Excel/CSV in the
+canonical columns: Make, Model, Year, Category, Part Number, plus one
+column per service name). Files under `coverage_sources/` are raw
+programmer-tool dumps and are not that format — normalize them before
+import. Do not run `SEED_SAMPLE=true` against the production database.
+
+### Firewall
+
+`web/firewall.config.json` is the Vercel WAF rate-limit payload for
+the public Server Actions, `/api/uploads/token` and `/track/*`. Publish
+it on the `ecu-service-lab` project (Vercel dashboard → Firewall, or
+`vercel firewall` with a token that can write the team scope).
