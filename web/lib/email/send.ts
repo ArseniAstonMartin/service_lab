@@ -1,6 +1,5 @@
 import "server-only";
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { createElement, type ReactElement } from "react";
 import type { Order, ModuleCategory, OrderPhoto, Service, Vehicle } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
@@ -70,6 +69,26 @@ function adminOrderUrl(order: OrderWithRelations): string {
 }
 
 /**
+ * Renders a template element to a static HTML string via
+ * react-dom/server. Imported dynamically, INSIDE this function, rather
+ * than as a top-level `import { renderToStaticMarkup } from
+ * "react-dom/server"` -- a static import of react-dom/server anywhere
+ * in this module's import graph fails `next build` the moment anything
+ * "use server" (e.g. lib/actions/place-order.ts, TASK-042) imports this
+ * file: "You're importing a component that imports react-dom/server...
+ * render or return the content directly as a Server Component
+ * instead." That rule exists for actual React components rendered as
+ * part of a page; it doesn't apply to what this is actually doing
+ * (rendering an email to a plain string, nothing ever reaches the RSC
+ * tree), but Next's check can't tell the difference from a static
+ * import alone -- a dynamic import sidesteps it.
+ */
+async function renderEmailHtml(element: ReactElement): Promise<string> {
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  return renderToStaticMarkup(element);
+}
+
+/**
  * Builds the {to, subject, html} for one order + email type. Throws
  * (caught by sendOrderEmail's try/catch below, never left to the
  * caller) when the order is missing a field a particular email type
@@ -77,10 +96,10 @@ function adminOrderUrl(order: OrderWithRelations): string {
  * actually has one is a caller bug, not a "send failed" case to retry
  * silently.
  */
-function buildEmail(
+async function buildEmail(
   order: OrderWithRelations,
   type: EmailType,
-): { to: string; subject: string; html: string } {
+): Promise<{ to: string; subject: string; html: string }> {
   switch (type) {
     case "order_submitted": {
       const props: OrderSubmittedEmailProps = {
@@ -91,7 +110,7 @@ function buildEmail(
       return {
         to: order.customerEmail,
         subject: orderSubmittedSubject(props),
-        html: renderToStaticMarkup(createElement(OrderSubmittedEmail, props)),
+        html: await renderEmailHtml(createElement(OrderSubmittedEmail, props)),
       };
     }
 
@@ -119,7 +138,7 @@ function buildEmail(
       return {
         to: order.customerEmail,
         subject: paymentLinkSubject(props),
-        html: renderToStaticMarkup(createElement(PaymentLinkEmail, props)),
+        html: await renderEmailHtml(createElement(PaymentLinkEmail, props)),
       };
     }
 
@@ -131,7 +150,7 @@ function buildEmail(
       return {
         to: order.customerEmail,
         subject: moduleReceivedSubject(props),
-        html: renderToStaticMarkup(createElement(ModuleReceivedEmail, props)),
+        html: await renderEmailHtml(createElement(ModuleReceivedEmail, props)),
       };
     }
 
@@ -144,7 +163,7 @@ function buildEmail(
       return {
         to: order.customerEmail,
         subject: readyShippedBackSubject(props),
-        html: renderToStaticMarkup(createElement(ReadyShippedBackEmail, props)),
+        html: await renderEmailHtml(createElement(ReadyShippedBackEmail, props)),
       };
     }
 
@@ -162,7 +181,7 @@ function buildEmail(
       return {
         to: env.ADMIN_NOTIFICATION_EMAIL,
         subject: adminNewOrderSubject(props),
-        html: renderToStaticMarkup(createElement(AdminNewOrderEmail, props)),
+        html: await renderEmailHtml(createElement(AdminNewOrderEmail, props)),
       };
     }
   }
@@ -228,7 +247,7 @@ export async function sendOrderEmail(
       include: { vehicle: true, category: true, service: true, photos: true },
     });
 
-    const { to, subject, html } = buildEmail(order, type);
+    const { to, subject, html } = await buildEmail(order, type);
 
     const result = await resend.emails.send({ from: env.RESEND_FROM_EMAIL, to, subject, html });
     if (result.error) {

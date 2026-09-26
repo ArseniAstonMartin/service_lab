@@ -8,6 +8,7 @@ import { decideMatch } from "@/lib/domain/compatibility";
 import { quote } from "@/lib/domain/quote";
 import { generateTrackingToken } from "@/lib/domain/token";
 import { isVercelBlobUrl } from "@/lib/blob";
+import { sendOrderEmail } from "@/lib/email/send";
 import { advanceOrderStatus } from "@/lib/services/order-status";
 // Side-effect-only import: TASK-026's lib/services/payment.ts registers
 // itself as the awaiting_payment side effect at module load time, and
@@ -288,18 +289,33 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
     return created;
   });
 
+  let result: PlaceOrderResult;
   if (matchResult.matched) {
     const advanced = await advanceOrderStatus(order.id, "awaiting_payment", "system");
-    return {
+    result = {
       orderNumber: advanced.id.toString(),
       trackingToken: advanced.trackingToken,
       status: advanced.status,
     };
+  } else {
+    result = {
+      orderNumber: order.id.toString(),
+      trackingToken: order.trackingToken,
+      status: order.status,
+    };
   }
 
-  return {
-    orderNumber: order.id.toString(),
-    trackingToken: order.trackingToken,
-    status: order.status,
-  };
+  // Emails #1 (customer: order submitted) and #5 (admin: new order) —
+  // TASK-042. Sent for both paths, only AFTER every DB write above has
+  // already committed (the order/photos/answers transaction, plus the
+  // matched path's own separate advanceOrderStatus transition).
+  // sendOrderEmail() never throws — a slow or failed send is logged to
+  // EmailLog and can never turn an already-successful placeOrder call
+  // into a failed one.
+  await Promise.all([
+    sendOrderEmail(order.id, "order_submitted"),
+    sendOrderEmail(order.id, "admin_new_order"),
+  ]);
+
+  return result;
 }

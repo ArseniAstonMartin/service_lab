@@ -1599,4 +1599,10 @@ still depends on TASK-028.
 - Added `RESEND_FROM_EMAIL` to `lib/env.ts` (defaults to Resend's own unverified test sender so dev/preview work with no setup; a real domain is TASK-046).
 - Verified with `tsc --noEmit`, a full `next build`, and a standalone `tsx` run rendering all 5 templates against realistic props (24 assertions: correct copy branching, dollar formatting, conditional tracking-number/sticker-photo lines, exact subjects) — all passed. Not yet wired into any order-status flow (that's TASK-042/043); nothing calls `sendOrderEmail` yet.
 - **Next up:** TASK-042 (emails #1/#5 from `placeOrder`) and TASK-043 (emails #2/#3/#4 from status side effects) are the direct, now-unblocked follow-ons. TASK-044 (pricing admin) remains the other unblocked `high` pick.
+
+## 2026-09-26 — TASK-042: Emails #1 (order submitted) and #5 (admin new order)
+- `placeOrder` now calls `sendOrderEmail(order.id, "order_submitted")` and `sendOrderEmail(order.id, "admin_new_order")` for both the matched and pending_review paths, only after every DB write (the create transaction, plus the matched path's separate `advanceOrderStatus`) has already committed; the idempotent-repeat early return does not re-send. `sendOrderEmail` never throws, so a slow/failed send can't turn a successful `placeOrder` into a failed one.
+- Fixed a bundling issue this surfaced: `lib/email/send.ts` statically imported `react-dom/server`, which is fine in isolation (nothing imported it) but fails `next build` ("You're importing a component that imports react-dom/server...") the moment a `"use server"` file (`placeOrder`) pulls it in transitively. Switched to a dynamic `await import("react-dom/server")` inside a small `renderEmailHtml()` helper, which sidesteps Next's static-import check without changing any actual template/rendering behavior.
+- Verified with `tsc --noEmit` and a full `next build` (previously failing on this exact import, now clean).
+- **Next up:** TASK-043 (emails #2/#3/#4 as order-status side effects) is the direct follow-on. TASK-044 (pricing admin) remains the other unblocked `high` pick.
  
