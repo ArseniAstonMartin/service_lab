@@ -1,6 +1,8 @@
+import Link from "next/link";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { ENTRY_SOURCE_LABELS } from "@/lib/constants";
+import { Button } from "@/components/ui/button";
 import { CompatibilityFilterBar } from "@/components/admin/compatibility-filter-bar";
 import { CompatibilityTable, type CompatibilityEntryRow } from "@/components/admin/compatibility-table";
 import { OrdersPagination } from "@/components/admin/orders-pagination";
@@ -90,11 +92,16 @@ export default async function AdminCompatibilityPage({
 
   return (
     <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="text-xl font-semibold">Compatibility</h1>
-        <p className="text-muted-foreground">
-          {total} entr{total === 1 ? "y" : "ies"} in the compatibility database.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold">Compatibility</h1>
+          <p className="text-muted-foreground">
+            {total} entr{total === 1 ? "y" : "ies"} in the compatibility database.
+          </p>
+        </div>
+        <Button asChild variant="outline" size="sm">
+          <Link href="/admin/compatibility/import">Import Excel/CSV</Link>
+        </Button>
       </div>
 
       <CompatibilityFilterBar

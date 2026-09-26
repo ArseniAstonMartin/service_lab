@@ -3,6 +3,7 @@
 import { z } from "zod";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
+import { revalidatePath } from "next/cache";
 import { EntrySource } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/supabase/require-admin";
@@ -257,6 +258,13 @@ export async function applyImport(rows: ResolvedImportRow[]): Promise<ApplyImpor
       }
     });
   }
+
+  // The import screen (TASK-040) sends the admin back to
+  // /admin/compatibility to see the results land -- refresh it here
+  // rather than relying on the client's router.refresh(), same as every
+  // other admin mutation (e.g. confirmCompatibility) revalidating its
+  // own downstream pages itself.
+  revalidatePath("/admin/compatibility");
 
   return { added, updated, skipped, skippedRows };
 }
