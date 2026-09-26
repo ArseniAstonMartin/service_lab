@@ -19,6 +19,8 @@ import {
 import { Card } from "@/components/ui/card";
 import { useWizard } from "@/components/wizard/wizard-store";
 import { getCategoryName, getQuote, type ServiceQuote } from "@/lib/actions/shipping";
+import { placeOrder } from "@/lib/actions/place-order";
+import { writeOrderResult } from "@/lib/wizard/order-result";
 import { formatCents } from "@/lib/format";
 import type { WizardContact } from "@/lib/wizard/types";
 
@@ -78,7 +80,7 @@ function ReviewRow({
  */
 export function ShippingForm() {
   const router = useRouter();
-  const { state, update } = useWizard();
+  const { state, update, reset } = useWizard();
 
   const isMatchedPath = Boolean(state.serviceId);
 
@@ -86,6 +88,8 @@ export function ShippingForm() {
   const [serviceQuote, setServiceQuote] = useState<ServiceQuote | null>(null);
   const [isLoadingSummary, setIsLoadingSummary] = useState(true);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -143,16 +147,57 @@ export function ShippingForm() {
     defaultValues: defaultContact,
   });
 
-  function onSubmit(values: ContactFormValues) {
+  async function onSubmit(values: ContactFormValues) {
     const contact: WizardContact = { ...values };
-    update({
-      contact,
-      // Generated once per wizard session (TASK-022's placeOrder uses
-      // this to make a repeat submit idempotent); never overwritten
-      // once set.
-      idempotencyKey: state.idempotencyKey ?? crypto.randomUUID(),
-    });
-    router.push("/order/confirmation");
+    // Generated once per wizard session (placeOrder uses this to make a
+    // repeat submit idempotent); never overwritten once set.
+    const idempotencyKey = state.idempotencyKey ?? crypto.randomUUID();
+    update({ contact, idempotencyKey });
+
+    setSubmitError(null);
+    setIsSubmitting(true);
+
+    try {
+      if (!state.vehicle || !state.categoryId || !state.stickerPhotoUrl) {
+        throw new Error(
+          "Your order is missing some required information — please go back and check each step.",
+        );
+      }
+
+      const result = await placeOrder({
+        vehicle: state.vehicle,
+        categoryId: state.categoryId,
+        partNumber: state.partNumber,
+        stickerPhotoUrl: state.stickerPhotoUrl,
+        serviceId: state.serviceId,
+        description: state.description,
+        answers: state.answers,
+        photoAnswers: state.photoAnswers,
+        contact,
+        idempotencyKey,
+      });
+
+      // Captured here, before reset() clears the wizard state below —
+      // /order/confirmation has nothing of its own left to read.
+      writeOrderResult({
+        orderNumber: result.orderNumber,
+        trackingToken: result.trackingToken,
+        status: result.status,
+        matched: Boolean(state.serviceId),
+        categoryName,
+        isCloning: Boolean(state.photoAnswers.original_photo || state.photoAnswers.donor_photo),
+        originalPartNumber: state.answers.original_part_number ?? null,
+        donorPartNumber: state.answers.donor_part_number ?? null,
+      });
+
+      reset();
+      router.push("/order/confirmation");
+    } catch (err) {
+      setSubmitError(
+        err instanceof Error ? err.message : "Something went wrong placing your order. Please try again.",
+      );
+      setIsSubmitting(false);
+    }
   }
 
   const matchedServiceName = serviceQuote?.service.name ?? null;
@@ -329,8 +374,21 @@ export function ShippingForm() {
             )}
           />
 
-          <Button type="submit" className="w-full" disabled={isLoadingSummary && isMatchedPath}>
-            Review &amp; continue
+          {submitError ? <p className="text-sm text-destructive">{submitError}</p> : null}
+
+          <Button
+            type="submit"
+            className="w-full"
+            disabled={(isLoadingSummary && isMatchedPath) || isSubmitting}
+          >
+            {isSubmitting ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Placing order…
+              </>
+            ) : (
+              "Place order"
+            )}
           </Button>
         </form>
       </Form>
