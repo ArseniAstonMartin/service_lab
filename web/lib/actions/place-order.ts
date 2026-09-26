@@ -9,6 +9,13 @@ import { quote } from "@/lib/domain/quote";
 import { generateTrackingToken } from "@/lib/domain/token";
 import { isVercelBlobUrl } from "@/lib/blob";
 import { advanceOrderStatus } from "@/lib/services/order-status";
+// Side-effect-only import: TASK-026's lib/services/payment.ts registers
+// itself as the awaiting_payment side effect at module load time, and
+// that registration only takes effect once this module has been
+// imported somewhere. This is the only current caller that moves an
+// order into awaiting_payment, so it must import it. See the docblock
+// on payment.ts's registerStatusSideEffect() call for the full rule.
+import "@/lib/services/payment";
 
 const RETURN_SHIPPING_FEE_KEY = "return_shipping_fee_cents";
 
