@@ -1630,4 +1630,8 @@ still depends on TASK-028.
 
 ## 2026-09-28 — TASK-046: Switch RESEND_FROM_EMAIL to the verified best-auto-repair.com domain
 - `lib/env.ts`, `.env.example`, and the README's Resend section now default to `ECU Service Lab <orders@best-auto-repair.com>` instead of the `onboarding@resend.dev` test sender. Verified with `tsc --noEmit` and `next lint` (both clean on the changed files; pre-existing unrelated errors elsewhere untouched).
+
+### ADD-SENTRY — Sentry error monitoring integration — **done** (commit: 3dfa6ae)
+- `@sentry/nextjs`, a new Sentry project (`hawaii-service-lab/ecu-service-lab-web`), and full wiring: `sentry.{client,server,edge}.config.ts` + `instrumentation.ts` (`onRequestError` covers uncaught Server Action/Route Handler/Server Component errors, including Prisma and the Stripe webhook), `app/global-error.tsx` for client crashes, and `lib/log.ts`'s `logServerError` now also calls `Sentry.captureException`. `next.config.mjs` uploads source maps at build time given `SENTRY_ORG`/`SENTRY_PROJECT`/`SENTRY_AUTH_TOKEN` in Vercel (the auth token still needs to be created manually in the Sentry dashboard and set there — no API for minting one).
+- Verified with a full `npm run build` (all 17 routes + middleware compile; `captureException`/`captureRequestError` present in both server and client bundles).
  
