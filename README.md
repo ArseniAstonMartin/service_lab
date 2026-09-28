@@ -100,12 +100,14 @@ is still an empty placeholder.
 
 ### Email (Resend)
 
-Verify a sending domain in Resend (SPF + DKIM at the DNS host), then
-set `RESEND_FROM_EMAIL` (for example
-`ECU Service Lab <orders@send.example.com>`) and `RESEND_API_KEY` in
-Vercel. Until a domain is verified the app falls back to Resend's
-`onboarding@resend.dev` test sender, which only delivers to the
-account owner.
+**Decision:** `best-auto-repair.com` is verified in Resend (SPF/DKIM
+published) and is now the default `RESEND_FROM_EMAIL`
+(`ECU Service Lab <orders@best-auto-repair.com>`). Set
+`RESEND_FROM_EMAIL` plus `RESEND_API_KEY` in Vercel Production to send
+from this domain; environments without it verified (e.g. a different
+Resend account for local dev) should override `RESEND_FROM_EMAIL` back
+to Resend's own `onboarding@resend.dev` test sender, which only
+delivers to the Resend account owner.
 
 ### Database backups (Supabase)
 

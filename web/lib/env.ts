@@ -26,11 +26,12 @@ const envSchema = z.object({
   // Resend
   RESEND_API_KEY: z.string().min(1),
   ADMIN_NOTIFICATION_EMAIL: z.string().email(),
-  // Verifying a real sending domain in Resend is explicitly TASK-046
-  // (production launch); defaulted so every other environment (local
-  // dev, preview deployments) works out of the box against Resend's own
-  // unverified test sender without needing this set.
-  RESEND_FROM_EMAIL: z.string().min(1).default("ECU Service Lab <onboarding@resend.dev>"),
+  // best-auto-repair.com is verified in Resend (SPF/DKIM published) as of
+  // TASK-046 (production launch); defaulted so every environment sends
+  // from the live domain without needing this set explicitly. Override
+  // only for local/dev setups that don't have that domain verified on
+  // their own Resend account.
+  RESEND_FROM_EMAIL: z.string().min(1).default("ECU Service Lab <orders@best-auto-repair.com>"),
 
   // Site
   NEXT_PUBLIC_SITE_URL: z.string().url(),
