@@ -1,3 +1,8 @@
+// @sentry/nextjs v11 moved the build-time config helper to its own
+// "/config" subpath (it isn't exported from the package root any more,
+// which the older docs example still shows).
+import { withSentryConfig } from "@sentry/nextjs/config";
+
 /** @type {import('next').NextConfig} */
 /** const nextConfig = {}; */
 
@@ -41,4 +46,20 @@ const nextConfig = {
   },
 };
 
-export default nextConfig;
+// ADD-SENTRY: wraps the config so the build uploads source maps to
+// Sentry (readable stack traces on captured errors) and injects the
+// runtime instrumentation the config files above rely on. org/project/
+// authToken come from Vercel env vars, not this file -- authToken is a
+// secret and must never be committed; the upload step silently no-ops
+// locally when it's unset (`silent: true` below only controls log
+// output, not whether the step runs).
+export default withSentryConfig(nextConfig, {
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  silent: true,
+  widenClientFileUpload: true,
+  hideSourceMaps: true,
+  disableLogger: true,
+  automaticVercelMonitors: true,
+});
