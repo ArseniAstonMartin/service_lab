@@ -13,7 +13,7 @@ export type OrderSubmittedEmailProps = {
 };
 
 export function subject({ orderNumber }: OrderSubmittedEmailProps): string {
-  return `Order #${orderNumber} received — ECU Service Lab`;
+  return `Order #${orderNumber} received — Best Auto Repair`;
 }
 
 export function OrderSubmittedEmail({ orderNumber, trackingUrl, matched }: OrderSubmittedEmailProps) {

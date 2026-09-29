@@ -2,20 +2,21 @@
 
 ## Project Structure & Module Organization
 
-ECU Service Lab is a Next.js App Router application with TypeScript, Prisma, and Supabase. Application code lives in `web/`:
+Best Auto Repair is a Next.js App Router application with TypeScript, Prisma, and Supabase. Application code lives in `web/`:
 
-- `app/(public)/`, `app/admin/`, and `app/api/`: customer flows, admin pages, and integration Route Handlers.
+- `app/(marketing)/`, `app/(public)/`, `app/admin/`, and `app/api/`: marketing, checkout, admin, and integration routes.
 - `components/`: shared UI, wizard, admin, and tracking components.
 - `lib/domain/`: pure business rules; keep framework and database imports out.
 - `lib/actions/`, `lib/services/`, and `lib/email/`: Server Actions, shared orchestration, and email templates.
 - `prisma/`: schema, migrations, and seed data.
-- `scripts/`: coverage conversion/import and admin provisioning.
+- `scripts/`, `tests/site/`: coverage imports, domain tests, and Playwright checks.
+- `public/images/marketing/`: generated WebP assets; prompts in `docs/marketing-assets.md` at repository root.
 
-Raw compatibility documents live in `coverage_sources/`; generated reports/backups go into gitignored `web/data/coverage-import/`. Consult `Requirements.md` for customer requirements, `PRD.md` for implementation context, and `README.md` for setup.
+Raw coverage lives in `coverage_sources/`; private reports/backups go into `web/data/coverage-import/`. Consult `Requirements.md`, `PRD.md`, and `README.md` for requirements and setup.
 
 ## Build, Test, and Development Commands
 
-Run commands from `web/`. Install dependencies with `npm install`, then copy `.env.example` to `.env.local` and configure it.
+From `web/`, run `npm install`, then copy `.env.example` to `.env.local` and configure it.
 
 - `npm run dev`: start the local development server.
 - `npm run build`: generate Prisma Client and build the production app; required before marking implementation work complete.
@@ -31,11 +32,11 @@ Follow existing TypeScript style: two-space indentation, double quotes, semicolo
 
 ## Testing Guidelines
 
-Run `npm run coverage:test` for Node's built-in tests in `scripts/coverage/*.test.ts`. No coverage threshold is configured. Build and manually verify affected customer/admin flows; report checks and limitations in the PR. Prioritize pure `lib/domain/` functions when adding tests.
+Run `npm run coverage:test` and `npm run site:test` for Node regression tests. Run `npm run site:e2e` against the local production server for Chrome checks. No coverage threshold is configured. Verify affected flows and report limitations. Prioritize pure `lib/domain/` functions when adding tests.
 
 ## Commit & Pull Request Guidelines
 
-History uses task-prefixed subjects such as `TASK-045: Security pass` and `ADD-SENTRY: Sentry error monitoring integration`. Keep commits focused. PRs should describe behavior changes, reference the relevant task/issue, record validation, and include screenshots for UI changes. Explain migrations and configuration changes explicitly.
+Use task-prefixed subjects such as `TASK-045: Security pass` or `ADD-SENTRY: Sentry integration`. Keep commits focused. PRs should describe changes, reference tasks/issues, record validation, and include UI screenshots. Explain migrations and configuration changes.
 
 ## Security & Data Conventions
 

@@ -3,6 +3,7 @@ import { createElement, type ReactElement } from "react";
 import type { Order, ModuleCategory, OrderPhoto, Service, Vehicle } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
+import { notificationSiteUrls } from "@/lib/site-urls";
 import { logServerError, safeErrorMessage } from "@/lib/log";
 import { resend } from "@/lib/email/resend-client";
 import {
@@ -62,11 +63,11 @@ type OrderWithRelations = Order & {
 };
 
 function trackingUrl(order: OrderWithRelations): string {
-  return `${env.NEXT_PUBLIC_SITE_URL}/track/${order.trackingToken}`;
+  return `${notificationSiteUrls().order}/track/${order.trackingToken}`;
 }
 
 function adminOrderUrl(order: OrderWithRelations): string {
-  return `${env.NEXT_PUBLIC_SITE_URL}/admin/orders/${order.id.toString()}`;
+  return `${notificationSiteUrls().admin}/admin/orders/${order.id.toString()}`;
 }
 
 /**

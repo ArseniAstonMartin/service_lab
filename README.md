@@ -1,4 +1,4 @@
-# ECU Service Lab — Automotive Module Compatibility & Repair Service Platform
+# Best Auto Repair — Automotive Service & Module Compatibility Platform
 
 B2B/B2C digital intake and reverse-logistics platform for an automotive
 electronics engineering lab on Oahu, Hawaii, repairing/cloning/reprogramming
@@ -84,12 +84,66 @@ Project's `tasks.json` `agent_instructions`.
 
 ## Production launch
 
-The production Vercel project is `ecu-service-lab`. The chosen
-production URL is `https://ecu-service-lab.vercel.app` (no custom
-domain). `NEXT_PUBLIC_SITE_URL` in the Production environment is set
-to that URL so payment links, tracking links and emails use it. If a
-custom domain is added later, point `NEXT_PUBLIC_SITE_URL` at
-`https://<domain>` and redeploy.
+The production Vercel project is `ecu-service-lab`, with application root
+`web/`. One deployment serves all three hosts:
+
+| Host | Routes |
+| --- | --- |
+| `best-auto-repair.com` / `www.best-auto-repair.com` | Marketing, services, directory, contact |
+| `order.best-auto-repair.com` | `/` redirects to `/order/vehicle`; existing `/order/*` and `/track/*` |
+| `admin.best-auto-repair.com` | `/orders`, `/pricing`, etc. rewrite to protected `/admin/*` routes |
+
+Middleware preserves query strings when moving old checkout/admin links to
+their intended host. APIs, webhooks and assets remain accessible at their
+existing paths. Admin authentication uses host-only Supabase cookies;
+mutations retain `requireAdmin()` guards. Moving between domains does not
+copy a checkout session or share admin cookies.
+
+Production payment-return and email links use the explicit hosts in
+`web/lib/domain/site-routing.ts`. Vercel previews keep all flows on their own
+preview hostname. Set `NEXT_PUBLIC_SITE_URL=https://best-auto-repair.com` in
+Production; local development uses `http://localhost:3000`.
+
+**Domain configuration:** all three requested hosts resolve to Vercel as of
+2026-09-29. The apex currently redirects to `www.best-auto-repair.com` in
+Vercel. To keep the apex visible, change that domain to serve this project's
+Production environment directly and optionally redirect `www` to the apex.
+Do not redirect the order/admin hosts to the marketing domain. Domain changes
+require project access; this code change does not modify Vercel settings.
+Follow [Vercel's domain setup instructions](https://vercel.com/docs/domains/working-with-domains/add-a-domain)
+and use the exact DNS records shown for this project.
+
+### Marketing development and checks
+
+`web/app/(marketing)/` holds public pages; `web/components/marketing/` contains
+shared navigation, service cards and layout. Business details and service copy
+live in `web/lib/marketing.ts`. The directory queries existing compatibility
+records with pagination; unconfirmed operations remain marked for manual review.
+Generated visual prompts and asset paths are recorded in
+[`docs/marketing-assets.md`](docs/marketing-assets.md).
+
+```sh
+cd web
+npm run site:test       # routing and public-input regression tests
+npm run coverage:test   # existing catalog regression tests
+npm run build
+npm run start          # leave running in a separate terminal
+npm run site:e2e        # Chrome: marketing, directory, checkout, admin redirects
+node tests/site/capture.mjs  # desktop/mobile screenshots under /tmp
+```
+
+Local subdomains are `order.localhost:3000` and `admin.localhost:3000`.
+Chrome resolves these without a hosts-file edit. Browser tests use installed
+Google Chrome by default; set `PLAYWRIGHT_CHANNEL=chromium` after installing
+Playwright Chromium to use that browser instead. They read the configured
+coverage database and do not create orders or send email.
+
+The contact form sends to the existing private `ADMIN_NOTIFICATION_EMAIL`
+through Resend, with a honeypot, strict field validation and an atomic limit of
+five submissions per hashed IP per hour in `app_settings`. Configure the
+recipient, `RESEND_API_KEY` and verified sender before accepting inquiries.
+No public email address is shown; failed delivery directs customers to the
+business phone number. Hours are by appointment, with no assumed schedule.
 
 ### Stripe
 
@@ -107,7 +161,7 @@ is still an empty placeholder.
 
 **Decision:** `best-auto-repair.com` is verified in Resend (SPF/DKIM
 published) and is now the default `RESEND_FROM_EMAIL`
-(`ECU Service Lab <orders@best-auto-repair.com>`). Set
+(`Best Auto Repair <orders@best-auto-repair.com>`). Set
 `RESEND_FROM_EMAIL` plus `RESEND_API_KEY` in Vercel Production to send
 from this domain; environments without it verified (e.g. a different
 Resend account for local dev) should override `RESEND_FROM_EMAIL` back

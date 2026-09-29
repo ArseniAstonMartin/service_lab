@@ -31,7 +31,7 @@ const envSchema = z.object({
   // from the live domain without needing this set explicitly. Override
   // only for local/dev setups that don't have that domain verified on
   // their own Resend account.
-  RESEND_FROM_EMAIL: z.string().min(1).default("ECU Service Lab <orders@best-auto-repair.com>"),
+  RESEND_FROM_EMAIL: z.string().min(1).default("Best Auto Repair <orders@best-auto-repair.com>"),
 
   // Site
   NEXT_PUBLIC_SITE_URL: z.string().url(),

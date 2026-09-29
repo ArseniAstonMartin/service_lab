@@ -16,7 +16,7 @@ export default async function AdminLoginPage({
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardTitle>Admin sign in</CardTitle>
-          <CardDescription>ECU Service Lab admin panel</CardDescription>
+          <CardDescription>Best Auto Repair admin panel</CardDescription>
         </CardHeader>
         <CardContent>
           <form action={signIn} className="space-y-4">

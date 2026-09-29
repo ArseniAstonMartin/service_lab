@@ -3,7 +3,7 @@ import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "ECU Service Lab",
+  title: "Best Auto Repair",
   description:
     "Automotive Module Compatibility & Repair Service — Oahu, Hawaii",
 };

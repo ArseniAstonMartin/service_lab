@@ -1,6 +1,7 @@
 import "server-only";
 import Stripe from "stripe";
 import { env } from "@/lib/env";
+import { notificationSiteUrls } from "@/lib/site-urls";
 
 /**
  * Server-only Stripe client (TASK-025). Test mode vs. live mode is
@@ -83,7 +84,7 @@ export async function createPaymentLink(order: PayableOrder): Promise<Stripe.Pay
       currency: "usd",
       unit_amount: order.servicePriceCents,
       product_data: {
-        name: `ECU Service Lab — Order #${order.id.toString()} service`,
+        name: `Best Auto Repair — Order #${order.id.toString()} service`,
       },
     }),
     stripe.prices.create({
@@ -107,7 +108,7 @@ export async function createPaymentLink(order: PayableOrder): Promise<Stripe.Pay
     after_completion: {
       type: "redirect",
       redirect: {
-        url: `${env.NEXT_PUBLIC_SITE_URL}/track/${order.trackingToken}`,
+        url: `${notificationSiteUrls().order}/track/${order.trackingToken}`,
       },
     },
   });

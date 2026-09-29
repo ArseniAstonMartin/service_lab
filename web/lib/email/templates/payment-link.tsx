@@ -18,7 +18,7 @@ export type PaymentLinkEmailProps = {
 };
 
 export function subject({ orderNumber }: PaymentLinkEmailProps): string {
-  return `Payment link for order #${orderNumber} — ECU Service Lab`;
+  return `Payment link for order #${orderNumber} — Best Auto Repair`;
 }
 
 export function PaymentLinkEmail({

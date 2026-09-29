@@ -42,7 +42,7 @@ export function EmailLayout({
                   <tbody>
                     <tr>
                       <td style={{ padding: "24px 28px", color: "#18181b", fontSize: 14, lineHeight: 1.5 }}>
-                        <p style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 700 }}>ECU Service Lab</p>
+                        <p style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 700 }}>Best Auto Repair</p>
                         {children}
                       </td>
                     </tr>

@@ -32,13 +32,11 @@ export const STATUS_COLORS: Record<OrderStatusValue, string> = {
 };
 
 /**
- * Inbound ship-to printed on the packing slip (TASK-029). The PRD does
- * not record a street address; replace the locality line with the real
- * shop street before launch.
+ * Inbound ship-to printed on the packing slip; supplied by the business.
  */
 export const SHOP_SHIPPING_ADDRESS = {
-  name: "ECU Service Lab",
-  locality: "Oahu, Hawaii",
+  name: "Best Auto Repair",
+  locality: "91-1018 Lipo St, Kapolei, Hawaii",
 } as const;
 
 /**

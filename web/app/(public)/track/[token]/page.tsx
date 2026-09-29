@@ -74,7 +74,7 @@ export default async function TrackOrderPage({
     <main className="mx-auto flex min-h-screen max-w-2xl flex-col gap-6 p-4 sm:p-6">
       <div>
         <Link href="/" className="text-sm text-muted-foreground hover:underline">
-          ECU Service Lab
+          Best Auto Repair
         </Link>
         <div className="mt-1 flex flex-wrap items-center gap-3">
           <h1 className="text-xl font-semibold">Order #{order.id.toString()}</h1>

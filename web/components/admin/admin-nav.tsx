@@ -25,15 +25,20 @@ function NavLinks({
   pendingReviewCount: number;
 }) {
   const pathname = usePathname();
+  // On the admin host, the visible path omits the internal /admin prefix.
+  const adminPath = pathname === "/admin" || pathname.startsWith("/admin/")
+    ? pathname
+    : `/admin${pathname === "/" ? "" : pathname}`;
 
   return (
     <nav className={cn("flex flex-col gap-1 md:flex-row md:items-center md:gap-1", className)}>
       {NAV_ITEMS.map((item) => {
-        const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+        const active = adminPath === item.href || adminPath.startsWith(`${item.href}/`);
         return (
           <Link
             key={item.href}
             href={item.href}
+            aria-current={active ? "page" : undefined}
             onClick={onNavigate}
             className={cn(
               "flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors",
@@ -78,7 +83,7 @@ export function AdminNav({
       <div className="flex h-14 items-center justify-between gap-4 px-4 md:px-6">
         <div className="flex items-center gap-6 overflow-hidden">
           <Link href="/admin" className="shrink-0 font-semibold">
-            ECU Service Lab
+            Best Auto Repair
           </Link>
           <NavLinks className="hidden md:flex" pendingReviewCount={pendingReviewCount} />
         </div>

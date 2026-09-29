@@ -2,8 +2,8 @@
   "firewallEnabled": true,
   "rules": [
     {
-      "name": "Rate limit checkCompatibility and placeOrder",
-      "description": "TASK-045: public Server Actions for compatibility lookup and order submit",
+      "name": "Rate limit public Server Actions",
+      "description": "Compatibility lookup, order submit and contact inquiries",
       "active": true,
       "conditionGroup": [
         {
@@ -11,7 +11,7 @@
             {
               "type": "server_action",
               "op": "inc",
-              "value": ["checkCompatibility", "placeOrder"]
+              "value": ["checkCompatibility", "placeOrder", "sendContactInquiry"]
             }
           ]
         }

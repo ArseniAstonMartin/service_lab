@@ -3,6 +3,8 @@
 /.pnp
 .pnp.js
 /.next/
+/test-results/
+/playwright-report/
 /out/
 /build
 .DS_Store
