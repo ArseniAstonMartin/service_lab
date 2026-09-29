@@ -3,3 +3,7 @@
 *.swp
 .idea/
 .vscode/
+
+# Generated coverage import CSVs (rebuild with npm run coverage:convert)
+web/data/*.csv
+web/data/coverage-import/

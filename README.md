@@ -124,36 +124,68 @@ orders you cannot afford to lose.
 
 ### Compatibility data
 
-`prisma/seed.ts` never writes sample vehicles or entries when
-`VERCEL_ENV=production`, even if `SEED_SAMPLE=true`. Real coverage is
-normalized from `coverage_sources/` (OBD Star G3) by
-`web/scripts/convert-coverage.mjs`:
+The authoritative customer workflow is in `Requirements.md`: an OEM part
+number and a specific supported operation are required to offer a service.
+Use `web/scripts/coverage-import.ts` to recursively inspect every XLSX/XLS
+sheet in `coverage_sources/`, validate locally, and replace the live catalog:
 
 ```
 cd web
-npm run coverage:convert   # writes web/data/*.csv (gitignored)
-npm run coverage:apply     # upserts vehicles + entries via Prisma
+npm run coverage:import -- --dry-run    # local only; default mode
+npm run coverage:test                  # parser/validation regression tests
+npm run coverage:import -- --inspect    # read-only database counts
+npm run coverage:import -- --verify     # exact source/DB comparison + query plan
+npm run coverage:import -- --replace    # backup + atomic purge/reload
+# Explicitly empty compatibility without reloading (also backs up first):
+npm run coverage:import -- --purge-only
 ```
 
-Or upload `web/data/compatibility-import.csv` at
-`/admin/compatibility/import`. Mapping is lossy:
+`coverage:convert` aliases the dry run; `coverage:apply` aliases replacement.
+They no longer consume the legacy generated CSVs. The old conversion/apply
+script paths delegate to this same pipeline. Curated CSVs can still use
+the admin import screen, which now also validates part numbers.
 
-- **CRASH RESET / AIRBAG** — Brand + OEM part number → Airbag/SRS
-  (`Crash Data Reset`, plus `SRS Module Repair` when the dump lists
-  write/erase). No model/year in the dump, so rows are stored on a
-  sentinel vehicle (`Model=All`, `Year=2000`) hidden from the public
-  picker. `checkCompatibility` / `placeOrder` fall back to the same
-  category + part number on any vehicle.
-- **ODO / CAR** — Brand + Model + Year + dashboard type → Instrument
-  Cluster (`Cluster Repair`). Dashboard type is used as the part
-  number when no OEM PN is listed.
-- **ECU Advanced** — rows with model, year, and a part/type, mapped
-  by System (ECM/TCM/BCM/cluster/airbag).
-- **IMMO** — make/model/year only (no services) so the wizard lists
-  real vehicles. IMMO, RFID, oil reset, flasher chip lists, moto, and
-  Xhorse ECU-model lists are not imported as services.
+Each run creates a private, gitignored `web/data/coverage-import/<timestamp>/`
+directory: `normalized.json` (including file hashes, all sheet headers, source
+coordinates, raw identifiers and connection methods), `rejected-rows.json`,
+and `report.json`. Replacement additionally saves `backup.json` before any
+deletion. Reports contain no connection secrets; backups include lookup data
+and order relation IDs, not customer contact/payment data.
 
-Do not run `SEED_SAMPLE=true` against the production database.
+- **Parts:** only explicit Part Number/Part No. columns in recognized module
+  layouts are eligible. ECU families, dashboard types and chips never become
+  OEM identifiers. Unknown categories/layouts and ambiguous identifiers are
+  reported, not guessed. Missing data and out-of-scope capabilities are
+  counted separately from invalid part numbers.
+- **Services:** explicit, unqualified `Erase Crash` support enables Crash Data
+  Reset; explicit ECM `Write VIN` support enables ECM VIN Write. Memory writes
+  do not imply repair/cloning. Recognized annotations (PARTIALLY, BETA, DIAG
+  ONLY, CAN, KLINE) are retained in provenance; affected entries have no
+  automatic services. Conflicting duplicates use the intersection of support.
+- **Applicability:** SRS sources without model/year use the existing private
+  `Model=All, Year=2000` storage convention. These are not real vehicles and
+  never appear in dropdowns. Lookup requires the same make, category and exact
+  part number. Other incomplete applicability is held in the rejection report.
+- **Vehicles:** automotive IMMO, ODO and ECU Advanced sheets can contribute
+  make/model/year independently of service coverage. Open year ranges expand
+  only for this directory through the recorded run year; month-specific,
+  reversed or excessive ranges are rejected. These vehicles do not establish
+  service support. The existing `(make, model, year)` unique index supports the
+  hierarchy; make/model grouping executes in PostgreSQL, not in JavaScript.
+- **Replacement:** uses 3,000-row `createMany`/`createManyAndReturn` batches
+  inside one Prisma transaction. Validation precedes deletion; failure rolls
+  back the purge. Reference categories, pricing and orders are preserved.
+  Order-owned vehicles remain; identical compatibility identities retain IDs
+  and order links. Obsolete matches are detached, with original links in the
+  backup. Historical vehicle spelling aliases are consolidated into an imported
+  equivalent with the same year, preserving the order's vehicle meaning.
+  An explicit replacement resets admin-confirmed compatibility too.
+
+Rerunning the same sources produces the same logical catalog without duplicate
+entries. The transaction locks writes briefly; reads retain the previous
+committed catalog. No migration or sequence reset is needed. Use a direct or
+session-pooler `DIRECT_URL` for this administrative job. Never run
+`SEED_SAMPLE=true` against production.
 
 ### Firewall
 

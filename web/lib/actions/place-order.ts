@@ -6,6 +6,7 @@ import type { OrderStatus, PhotoType } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { normalizePartNumber } from "@/lib/domain/part-number";
 import { decideMatch } from "@/lib/domain/compatibility";
+import { lookupCompatibility, servicesFromEntry } from "@/lib/services/compatibility-lookup";
 import { quote } from "@/lib/domain/quote";
 import { generateTrackingToken } from "@/lib/domain/token";
 import { isVercelBlobUrl } from "@/lib/blob";
@@ -127,14 +128,12 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
 
   const normalizedPartNumber = normalizePartNumber(parsed.partNumber);
 
-  const vehicle = await prisma.vehicle.findUnique({
-    where: {
-      make_model_year: {
-        make: parsed.vehicle.make,
-        model: parsed.vehicle.model,
-        year: parsed.vehicle.year,
-      },
-    },
+  const { vehicle, entry } = await lookupCompatibility({
+    make: parsed.vehicle.make,
+    model: parsed.vehicle.model,
+    year: parsed.vehicle.year,
+    categoryId,
+    partNumber: parsed.partNumber,
   });
   // Order.vehicleId is required: the wizard only ever offers real
   // vehicles (TASK-016), so this shouldn't normally happen, but there is
@@ -143,27 +142,8 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
     throw new Error("Vehicle not found");
   }
 
-  const entry = await prisma.compatibilityEntry.findUnique({
-    where: {
-      vehicleId_categoryId_partNumber: {
-        vehicleId: vehicle.id,
-        categoryId,
-        partNumber: normalizedPartNumber,
-      },
-    },
-    include: {
-      services: {
-        include: { service: { include: { priceTier: true } } },
-      },
-    },
-  });
-
   const entrySummary = entry ? { id: entry.id.toString() } : null;
-  const entryServices = (entry?.services ?? []).map((link) => ({
-    id: link.service.id.toString(),
-    name: link.service.name,
-    priceCents: link.service.priceTier.amountCents,
-  }));
+  const entryServices = entry ? servicesFromEntry(entry) : [];
 
   // The single source of truth for whether this is a match — exactly
   // TASK-010's decideMatch(), the same rule checkCompatibility applies.

@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -35,24 +36,38 @@ export function VehicleSelector({ makes }: { makes: string[] }) {
   // hydration) so returning to this step with a make already chosen
   // still shows the right downstream options.
   useEffect(() => {
+    let cancelled = false;
+    setModels([]);
     if (!make) {
-      setModels([]);
       return;
     }
-    startTransition(() => {
-      getModels(make).then(setModels);
+    startTransition(async () => {
+      try {
+        const values = await getModels(make);
+        if (!cancelled) setModels(values);
+      } catch {
+        if (!cancelled) toast.error("Unable to load models. Please try again.");
+      }
     });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [make]);
 
   useEffect(() => {
+    let cancelled = false;
+    setYears([]);
     if (!make || !model) {
-      setYears([]);
       return;
     }
-    startTransition(() => {
-      getYears(make, model).then(setYears);
+    startTransition(async () => {
+      try {
+        const values = await getYears(make, model);
+        if (!cancelled) setYears(values);
+      } catch {
+        if (!cancelled) toast.error("Unable to load years. Please try again.");
+      }
     });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [make, model]);
 
@@ -70,7 +85,7 @@ export function VehicleSelector({ makes }: { makes: string[] }) {
     update({ vehicle: { make, model, year: Number(nextYear) } });
   }
 
-  const canContinue = Boolean(make && model && year);
+  const canContinue = Boolean(make && model && year && models.includes(model) && years.includes(year));
 
   if (!ready) {
     return null;

@@ -9,6 +9,7 @@ import { EntrySource } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/supabase/require-admin";
 import { normalizePartNumber } from "@/lib/domain/part-number";
+import { validateCoveragePart } from "@/lib/domain/coverage-validation";
 import {
   collectUnknownColumns,
   validateImportRow,
@@ -126,11 +127,14 @@ export async function previewImport(file: File): Promise<PreviewImportResult> {
 
 const applyImportRowSchema = z.object({
   rowNumber: z.number().int().positive(),
-  make: z.string().trim().min(1),
-  model: z.string().trim().min(1),
+  make: z.string().trim().min(1).max(50),
+  model: z.string().trim().min(1).max(50),
   year: z.number().int().min(IMPORT_YEAR_MIN).max(IMPORT_YEAR_MAX),
   categoryName: z.string().trim().min(1),
-  partNumber: z.string().trim().min(1),
+  partNumber: z.string().trim().refine((value) => {
+    const result = validateCoveragePart(value);
+    return result !== null && !result.conditional;
+  }, "An explicit, unqualified OEM part number is required"),
   serviceNames: z.array(z.string().trim().min(1)),
 });
 

@@ -2,20 +2,23 @@
 
 import "server-only";
 import { prisma } from "@/lib/db";
+import { COVERAGE_SENTINEL_MODEL } from "@/lib/domain/coverage";
+
+const publicVehicleWhere = {
+  NOT: { model: COVERAGE_SENTINEL_MODEL },
+} as const;
 
 /**
- * Cascading Make → Model → Year lookups for /order/vehicle. Every level
- * is filtered to vehicles with at least one compatibility entry — a
- * customer should never be offered a make/model/year combination that
- * can't possibly match anything, since that would always funnel them
- * into manual review.
+ * Cascading Make → Model → Year lookups for /order/vehicle.
+ * Brand-level sentinel rows (model "All") from coverage_sources are
+ * hidden — customers pick a real model/year; part-number fallback still
+ * matches programmer-dump entries stored on those sentinels.
  */
 
 export async function getMakes(): Promise<string[]> {
-  const rows = await prisma.vehicle.findMany({
-    where: { compatibilityEntries: { some: {} } },
-    select: { make: true },
-    distinct: ["make"],
+  const rows = await prisma.vehicle.groupBy({
+    by: ["make"],
+    where: publicVehicleWhere,
     orderBy: { make: "asc" },
   });
 
@@ -25,10 +28,9 @@ export async function getMakes(): Promise<string[]> {
 export async function getModels(make: string): Promise<string[]> {
   if (!make) return [];
 
-  const rows = await prisma.vehicle.findMany({
-    where: { make, compatibilityEntries: { some: {} } },
-    select: { model: true },
-    distinct: ["model"],
+  const rows = await prisma.vehicle.groupBy({
+    by: ["model"],
+    where: { make, ...publicVehicleWhere },
     orderBy: { model: "asc" },
   });
 
@@ -39,9 +41,8 @@ export async function getYears(make: string, model: string): Promise<number[]> {
   if (!make || !model) return [];
 
   const rows = await prisma.vehicle.findMany({
-    where: { make, model, compatibilityEntries: { some: {} } },
+    where: { make, model, ...publicVehicleWhere },
     select: { year: true },
-    distinct: ["year"],
     orderBy: { year: "desc" },
   });
 

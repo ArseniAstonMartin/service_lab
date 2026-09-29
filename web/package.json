@@ -9,6 +9,10 @@
     "lint": "next lint",
     "postinstall": "prisma generate",
     "db:seed": "prisma db seed",
+    "coverage:convert": "node --import tsx scripts/coverage-import.ts --dry-run",
+    "coverage:apply": "node --import tsx scripts/coverage-import.ts --replace",
+    "coverage:import": "node --import tsx scripts/coverage-import.ts",
+    "coverage:test": "node --import tsx --test scripts/coverage/*.test.ts",
     "vercel-build": "if [ \"$VERCEL_ENV\" = \"production\" ]; then prisma generate && prisma migrate deploy && next build; else prisma generate && next build; fi"
   },
   "dependencies": {

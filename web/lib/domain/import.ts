@@ -10,6 +10,8 @@
  */
 
 /** One raw spreadsheet row: header text (as written in the file) -> cell text. */
+import { validateCoveragePart } from "./coverage-validation";
+
 export type ImportCellRow = Record<string, string>;
 
 export type ResolvedImportRow = {
@@ -92,7 +94,9 @@ export function validateImportRow(
   if (!make) reasons.push("Missing Make");
   if (!model) reasons.push("Missing Model");
   if (year === null) reasons.push("Invalid Year");
-  if (!partNumber) reasons.push("Empty Part Number");
+  const part = validateCoveragePart(partNumber);
+  if (!part || part.conditional) reasons.push("Invalid or qualified Part Number; import an explicit, unqualified OEM identifier");
+  if (make.length > 50 || model.length > 50) reasons.push("Make/Model exceeds 50 characters");
 
   const categoryMatch = categoryNames.find(
     (name) => name.toLowerCase() === categoryRaw.toLowerCase(),

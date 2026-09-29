@@ -2,10 +2,9 @@
 
 import "server-only";
 import { z } from "zod";
-import { prisma } from "@/lib/db";
-import { normalizePartNumber } from "@/lib/domain/part-number";
 import { decideMatch, type MatchResult } from "@/lib/domain/compatibility";
 import { isVercelBlobUrl } from "@/lib/blob";
+import { lookupCompatibility, servicesFromEntry } from "@/lib/services/compatibility-lookup";
 
 const checkCompatibilitySchema = z.object({
   vehicle: z.object({
@@ -83,16 +82,12 @@ export async function checkCompatibility(
     throw new Error("Invalid categoryId");
   }
 
-  const normalizedPartNumber = normalizePartNumber(parsed.partNumber);
-
-  const vehicle = await prisma.vehicle.findUnique({
-    where: {
-      make_model_year: {
-        make: parsed.vehicle.make,
-        model: parsed.vehicle.model,
-        year: parsed.vehicle.year,
-      },
-    },
+  const { vehicle, entry } = await lookupCompatibility({
+    make: parsed.vehicle.make,
+    model: parsed.vehicle.model,
+    year: parsed.vehicle.year,
+    categoryId,
+    partNumber: parsed.partNumber,
   });
 
   // No matching vehicle row at all (shouldn't normally happen — the
@@ -102,32 +97,9 @@ export async function checkCompatibility(
     return toClientMatchResult(decideMatch(null, []));
   }
 
-  const entry = await prisma.compatibilityEntry.findUnique({
-    where: {
-      vehicleId_categoryId_partNumber: {
-        vehicleId: vehicle.id,
-        categoryId,
-        partNumber: normalizedPartNumber,
-      },
-    },
-    include: {
-      services: {
-        include: {
-          service: { include: { priceTier: true } },
-        },
-      },
-    },
-  });
-
   if (!entry) {
     return toClientMatchResult(decideMatch(null, []));
   }
 
-  const services = entry.services.map((link) => ({
-    id: link.service.id.toString(),
-    name: link.service.name,
-    priceCents: link.service.priceTier.amountCents,
-  }));
-
-  return toClientMatchResult(decideMatch({ id: entry.id.toString() }, services));
+  return toClientMatchResult(decideMatch({ id: entry.id.toString() }, servicesFromEntry(entry)));
 }
