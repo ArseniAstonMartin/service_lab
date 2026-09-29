@@ -26,6 +26,8 @@ export class UnauthorizedError extends Error {
  * Server Action and the label-upload token route against that rule.
  *
  * Returns the authenticated Supabase user, or throws UnauthorizedError.
+ * There is no app-level role table or seed/bypass: public sign-up is
+ * off, so a valid session is the admin role.
  */
 export async function requireAdmin(): Promise<User> {
   const supabase = await createSupabaseServerClient();

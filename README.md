@@ -53,11 +53,16 @@ Providers → Email → turn off "Allow new users to sign up". This must be
 done once per environment (the Supabase project is shared across
 Preview/Production in this setup).
 
-**Create an admin user**: Supabase dashboard → Authentication → Users →
-"Add user" → set an email and password (or "Send invite"). Any user that
-exists in Supabase Auth can log in at `/admin/login` — there is currently
-no separate admin role/claim, so anyone with a Supabase Auth account for
-this project is treated as an admin.
+**Create an admin user** in the Supabase dashboard: Authentication →
+Users → **Add user** → email + password (auto-confirm), or **Send
+invite**. Admins are Supabase Auth users, not Prisma rows — do not
+insert into `auth.users` by hand, and there is no seed/bypass script.
+
+Then open `/admin/login` (local: `http://localhost:3000/admin/login`,
+production: `https://ecu-service-lab.vercel.app/admin/login`) and sign in
+with that email and password. Any user that exists in this project's
+Supabase Auth is treated as an admin — there is no separate role table
+(public sign-up is disabled, so only dashboard-created users can log in).
 
 Middleware (`middleware.ts`) refreshes the session on every request and
 redirects unauthenticated visits to `/admin/*` pages to `/admin/login`.
@@ -111,24 +116,44 @@ delivers to the Resend account owner.
 
 ### Database backups (Supabase)
 
-**Decision:** production requires a paid Supabase plan so automatic
-daily backups are on. The Free tier has no automatic backups and is
-not acceptable once real customer orders live here. Pro (or any paid
-tier that includes daily backups / PITR) is the chosen plan.
-
-The current "Hawaii Service Lab" org (`vsawotguarbbamwcvkew`) is still
-on **Free**. Upgrade it in the Supabase dashboard before taking paid
-orders.
+**Decision:** stay on the Free plan for now (no automatic daily
+backups). The "Hawaii Service Lab" org (`vsawotguarbbamwcvkew`) is
+Free. Upgrade to Pro (or any paid tier with daily backups / PITR) in
+the Supabase dashboard before relying on this database for paid
+orders you cannot afford to lose.
 
 ### Compatibility data
 
 `prisma/seed.ts` never writes sample vehicles or entries when
-`VERCEL_ENV=production`, even if `SEED_SAMPLE=true`. Import the real
-dataset through `/admin/compatibility/import` (Excel/CSV in the
-canonical columns: Make, Model, Year, Category, Part Number, plus one
-column per service name). Files under `coverage_sources/` are raw
-programmer-tool dumps and are not that format — normalize them before
-import. Do not run `SEED_SAMPLE=true` against the production database.
+`VERCEL_ENV=production`, even if `SEED_SAMPLE=true`. Real coverage is
+normalized from `coverage_sources/` (OBD Star G3) by
+`web/scripts/convert-coverage.mjs`:
+
+```
+cd web
+npm run coverage:convert   # writes web/data/*.csv (gitignored)
+npm run coverage:apply     # upserts vehicles + entries via Prisma
+```
+
+Or upload `web/data/compatibility-import.csv` at
+`/admin/compatibility/import`. Mapping is lossy:
+
+- **CRASH RESET / AIRBAG** — Brand + OEM part number → Airbag/SRS
+  (`Crash Data Reset`, plus `SRS Module Repair` when the dump lists
+  write/erase). No model/year in the dump, so rows are stored on a
+  sentinel vehicle (`Model=All`, `Year=2000`) hidden from the public
+  picker. `checkCompatibility` / `placeOrder` fall back to the same
+  category + part number on any vehicle.
+- **ODO / CAR** — Brand + Model + Year + dashboard type → Instrument
+  Cluster (`Cluster Repair`). Dashboard type is used as the part
+  number when no OEM PN is listed.
+- **ECU Advanced** — rows with model, year, and a part/type, mapped
+  by System (ECM/TCM/BCM/cluster/airbag).
+- **IMMO** — make/model/year only (no services) so the wizard lists
+  real vehicles. IMMO, RFID, oil reset, flasher chip lists, moto, and
+  Xhorse ECU-model lists are not imported as services.
+
+Do not run `SEED_SAMPLE=true` against the production database.
 
 ### Firewall
 
