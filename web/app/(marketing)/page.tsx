@@ -24,7 +24,7 @@ export default async function HomePage() {
           fill
           priority
           sizes="100vw"
-          alt="Silver sports sedan outside a modern automotive workshop"
+          alt="Silver sports sedan outside a modern automotive workshop, with a lush Hawaiian coastline and mountains in the background"
         />
         <div className="m-hero-shade" />
         <div className="m-container m-hero-content">
