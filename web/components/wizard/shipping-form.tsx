@@ -228,10 +228,10 @@ export function ShippingForm() {
         <ReviewRow
           label="Module"
           value={categoryName ?? (isLoadingSummary ? "Loading…" : "—")}
-          editHref="/order/module"
+          editHref="/order/vehicle"
         />
 
-        <ReviewRow label="Part number" value={state.partNumber || "—"} editHref="/order/compatibility" />
+        <ReviewRow label="Part number" value={state.partNumber || "—"} editHref="/order/vehicle" />
 
         {isMatchedPath ? (
           <ReviewRow

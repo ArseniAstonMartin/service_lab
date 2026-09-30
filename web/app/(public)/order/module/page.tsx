@@ -1,20 +1,12 @@
-import { ModuleSelector } from "@/components/wizard/module-selector";
-import { getModuleCategories } from "@/lib/actions/module";
+import { redirect } from "next/navigation";
 
-export const dynamic = "force-dynamic";
-
-export default async function OrderModulePage() {
-  const categories = await getModuleCategories();
-
-  return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-lg font-semibold">Which module are you repairing?</h1>
-        <p className="text-sm text-muted-foreground">
-          Pick the category that matches your part.
-        </p>
-      </div>
-      <ModuleSelector categories={categories} />
-    </div>
-  );
+/**
+ * /order/module used to be its own wizard step; it's now folded into
+ * /order/vehicle (vehicle + module + part number combined into a single
+ * first step). Kept as a redirect, not removed, so a stale bookmark, an
+ * old browser-history entry, or a tab left open mid-checkout from before
+ * this change still lands somewhere useful instead of a 404.
+ */
+export default function OrderModuleRedirect() {
+  redirect("/order/vehicle");
 }

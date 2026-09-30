@@ -22,19 +22,22 @@ async function chooseTesla(page: Page, category: string) {
   await page.getByRole("combobox").nth(2).click();
   await expect(page.getByRole("option", { name: "2000", exact: true })).toHaveCount(0);
   await page.getByRole("option", { name: "2024", exact: true }).click();
-  await page.getByRole("button", { name: "Next", exact: true }).click();
+  // Vehicle, module, and part number/photo are now one combined step
+  // (/order/vehicle) instead of three separate pages, so there's no
+  // "Next" between picking the vehicle and picking the module.
   await page.getByRole("button", { name: category, exact: true }).click();
-  await page.getByRole("button", { name: "Next", exact: true }).click();
 }
 
-test("Tesla battery coverage reaches service, questions and quote review", async ({ page }) => {
+test("Tesla battery coverage reaches service, questions and current admin pricing", async ({ page }) => {
   await chooseTesla(page, "Battery/BMS");
   await page.getByLabel("Part Number", { exact: true }).fill("1598486-00-D");
   await page.getByRole("button", { name: "Check compatibility" }).click();
   await expect(page.getByText("Found it — 1 service confirmed for this part.")).toBeVisible();
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   const service = page.getByRole("radio", { name: /Tesla Battery Reset/ });
-  await expect(service).toContainText("Quote after review");
+  await expect(service).toBeVisible();
+  const requiresQuote = await page.evaluate(() => JSON.parse(sessionStorage.getItem("ecu-wizard-state")!).matchResult.services[0].priceCents === null);
+  if (requiresQuote) await expect(service).toContainText("Quote after review");
   await expect(page.getByText("Crash Data Reset", { exact: true })).toHaveCount(0);
   await service.click();
   await page.getByRole("button", { name: "Next", exact: true }).click();
@@ -48,7 +51,11 @@ test("Tesla battery coverage reaches service, questions and quote review", async
   }
   await page.getByRole("button", { name: "Next", exact: true }).click();
   await expect(page).toHaveURL(/\/order\/shipping$/);
-  await expect(page.getByText(/Quote after review\. Your selected service is supported/)).toBeVisible();
+  if (requiresQuote) {
+    await expect(page.getByText(/Quote after review\. Your selected service is supported/)).toBeVisible();
+  } else {
+    await expect(page.getByText("Total", { exact: true })).toBeVisible();
+  }
   await expect(page.getByText("$0.00", { exact: true })).toHaveCount(0);
 });
 

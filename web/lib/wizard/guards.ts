@@ -5,41 +5,30 @@ import type { WizardState } from "@/lib/wizard/types";
  * /order/confirmation, which no longer has wizard state to check by the
  * time it renders — TASK-023 clears it before navigating there — and
  * already has its own "no order found" fallback for a direct link).
+ *
+ * "vehicle" covers vehicle, module, and part number/photo — those three
+ * used to be separate steps (module, compatibility) but were combined
+ * into a single /order/vehicle step; /order/module and
+ * /order/compatibility now just redirect there.
  */
-export type WizardStep =
-  | "vehicle"
-  | "module"
-  | "compatibility"
-  | "service"
-  | "details"
-  | "shipping";
+export type WizardStep = "vehicle" | "service" | "details" | "shipping";
 
 const STEP_PATHS: Record<WizardStep, string> = {
   vehicle: "/order/vehicle",
-  module: "/order/module",
-  compatibility: "/order/compatibility",
   service: "/order/service",
   details: "/order/details",
   shipping: "/order/shipping",
 };
 
-/** True once the wizard has gone through /order/vehicle. */
-function hasVehicle(state: WizardState): boolean {
-  return Boolean(state.vehicle);
-}
-
-/** True once the wizard has gone through /order/module too. */
-function hasCategory(state: WizardState): boolean {
-  return hasVehicle(state) && Boolean(state.categoryId);
-}
-
-/** True once the wizard has gone through /order/compatibility — a
- * check has actually been run and a result stored (matched either
+/** True once the wizard has gone through /order/vehicle: a vehicle,
+ * module category, part number, and photo were all submitted and
+ * checkCompatibility actually ran (a result was stored, matched either
  * way). Deliberately checks matchResult's presence, not its outcome:
  * that's /order/service's job below. */
 function hasCompatibilityChecked(state: WizardState): boolean {
   return (
-    hasCategory(state) &&
+    Boolean(state.vehicle) &&
+    Boolean(state.categoryId) &&
     Boolean(state.partNumber) &&
     Boolean(state.stickerPhotoUrl) &&
     state.matchResult !== null
@@ -84,24 +73,17 @@ export function redirectTargetFor(step: WizardStep, state: WizardState): string 
   switch (step) {
     case "vehicle":
       return null;
-    case "module":
-      return hasVehicle(state) ? null : STEP_PATHS.vehicle;
-    case "compatibility":
-      if (!hasVehicle(state)) return STEP_PATHS.vehicle;
-      return hasCategory(state) ? null : STEP_PATHS.module;
     case "service":
-      // Acceptance criteria (TASK-024): redirects to /order/compatibility
-      // unless the store holds a successful match — deliberately not a
-      // deeper chain back through module/vehicle, since a missing
-      // vehicle or category also means no successful match and lands
-      // here anyway, and /order/compatibility's own guard (above) takes
-      // it the rest of the way back if needed.
-      return hasSuccessfulMatch(state) ? null : STEP_PATHS.compatibility;
+      // Redirects to /order/vehicle unless the store holds a successful
+      // match — deliberately not a deeper chain, since a missing
+      // vehicle, category, or part number also means no successful
+      // match and lands here anyway.
+      return hasSuccessfulMatch(state) ? null : STEP_PATHS.vehicle;
     case "details":
-      if (!hasCompatibilityChecked(state)) return STEP_PATHS.compatibility;
+      if (!hasCompatibilityChecked(state)) return STEP_PATHS.vehicle;
       return hasServiceDecision(state) ? null : STEP_PATHS.service;
     case "shipping":
-      if (!hasCompatibilityChecked(state)) return STEP_PATHS.compatibility;
+      if (!hasCompatibilityChecked(state)) return STEP_PATHS.vehicle;
       if (!hasServiceDecision(state)) return STEP_PATHS.service;
       return hasDetails(state) ? null : STEP_PATHS.details;
     default:

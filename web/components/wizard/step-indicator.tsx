@@ -4,9 +4,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 const STEPS = [
-  { href: "/order/vehicle", label: "Vehicle" },
-  { href: "/order/module", label: "Module" },
-  { href: "/order/compatibility", label: "Part" },
+  { href: "/order/vehicle", label: "Start" },
   { href: "/order/service", label: "Service" },
   { href: "/order/details", label: "Details" },
   { href: "/order/shipping", label: "Shipping" },

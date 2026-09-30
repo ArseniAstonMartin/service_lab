@@ -101,9 +101,13 @@ test("production host routing preserves queries and protects admin", async ({ re
   expect(await robots.text()).toContain("Disallow: /");
 });
 
-test("order subdomain loads the existing vehicle selection", async ({ page }) => {
+test("order subdomain loads the combined vehicle/module/part step", async ({ page }) => {
   await page.goto("http://order.localhost:3000/");
   await expect(page).toHaveURL(/\/order\/vehicle$/);
-  await expect(page.getByRole("heading", { name: "What's your vehicle?" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Tell us about your module." })).toBeVisible();
   await expect(page.getByRole("combobox").first()).toBeEnabled();
+  // Vehicle, module, and part number/photo are one page now — the old
+  // /order/module and /order/compatibility steps just redirect back here.
+  await expect(page.getByRole("heading", { name: "Module", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Part number & photo" })).toBeVisible();
 });

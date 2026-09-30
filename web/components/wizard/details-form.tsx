@@ -23,8 +23,8 @@ import { getQuestions, type QuestionSummary } from "@/lib/actions/questions";
 export function DetailsForm() {
   const router = useRouter();
   const { state, update } = useWizard();
-  // Redirects to /order/compatibility (no check run yet) or
-  // /order/service (matched but no service chosen yet) — TASK-024.
+  // Redirects to /order/vehicle (no check run yet) or /order/service
+  // (matched but no service chosen yet) — TASK-024.
   const ready = useStepGuard("details");
 
   const serviceId = state.serviceId;

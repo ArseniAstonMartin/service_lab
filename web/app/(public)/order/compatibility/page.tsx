@@ -1,16 +1,13 @@
-import { CompatibilityForm } from "@/components/wizard/compatibility-form";
+import { redirect } from "next/navigation";
 
-export default function OrderCompatibilityPage() {
-  return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-lg font-semibold">Part number & photo</h1>
-        <p className="text-sm text-muted-foreground">
-          We&apos;ll check this against our compatibility database before you pick a
-          service.
-        </p>
-      </div>
-      <CompatibilityForm />
-    </div>
-  );
+/**
+ * /order/compatibility used to be its own wizard step; it's now folded
+ * into /order/vehicle (vehicle + module + part number combined into a
+ * single first step). Kept as a redirect, not removed, so a stale
+ * bookmark, an old browser-history entry, or a tab left open
+ * mid-checkout from before this change still lands somewhere useful
+ * instead of a 404.
+ */
+export default function OrderCompatibilityRedirect() {
+  redirect("/order/vehicle");
 }

@@ -19,10 +19,10 @@ import { TESLA_BATTERY_SERVICE } from "@/lib/domain/coverage";
 export function ServiceSelector() {
   const router = useRouter();
   const { state, update } = useWizard();
-  // Redirects to /order/compatibility unless the store holds a
-  // successful match (TASK-024's acceptance criteria for this step
-  // specifically) — replaces the temporary "go back" fallback this
-  // page rendered before the guard existed.
+  // Redirects to /order/vehicle unless the store holds a successful
+  // match (TASK-024's acceptance criteria for this step specifically)
+  // — replaces the temporary "go back" fallback this page rendered
+  // before the guard existed.
   const ready = useStepGuard("service");
 
   const services = state.matchResult?.services ?? [];
