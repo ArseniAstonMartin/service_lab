@@ -6,7 +6,6 @@ export default function sitemap(): MetadataRoute.Sitemap {
     "/services",
     "/ecu-models",
     "/mail-in-service",
-    "/auto-repair",
     "/about",
     "/contact",
     ...MARKETING_SERVICES.map((service) => `/services/${service.slug}`),

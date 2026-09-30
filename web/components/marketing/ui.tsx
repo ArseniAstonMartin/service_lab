@@ -1,15 +1,19 @@
 import Link from "next/link";
 import {
   ArrowRight,
+  BatteryCharging,
   CalendarDays,
   Cpu,
+  Disc3,
   KeyRound,
   Leaf,
   Microchip,
   MonitorCog,
   Package,
+  Power,
   ShieldCheck,
   Wrench,
+  Zap,
   type LucideIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -22,6 +26,12 @@ const SERVICE_ICONS: Record<string, LucideIcon> = {
   chip: Microchip,
   leaf: Leaf,
   key: KeyRound,
+  // Added for the /services/auto-repair mobile-services card grid
+  // (lib/marketing.ts's MOBILE_SERVICES).
+  disc: Disc3,
+  power: Power,
+  batterycharging: BatteryCharging,
+  zap: Zap,
 };
 export function ServiceIcon({ name, size = 25 }: { name: string; size?: number }) {
   const Icon = SERVICE_ICONS[name] ?? Cpu;

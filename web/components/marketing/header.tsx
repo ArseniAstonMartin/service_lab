@@ -71,7 +71,7 @@ export function MarketingHeader({ orderUrl }: { orderUrl: string }) {
           </div>
           <Link href="/ecu-models">ECU &amp; Models</Link>
           <Link href="/mail-in-service">Mail-in Service</Link>
-          <Link href="/auto-repair">Auto Repair</Link>
+          <Link href="/services/auto-repair">Auto Repair</Link>
           <Link href="/about">About</Link>
           <Link href="/contact">Contact</Link>
         </nav>

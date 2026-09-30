@@ -14,20 +14,21 @@ export const MARKETING_SERVICES = [
   {
     slug: "auto-repair",
     title: "Auto Repair",
-    short: "Maintenance and repair to keep your vehicle ready for the road.",
+    short: "Mobile diagnostics and repair, on-site across Oahu.",
     icon: "wrench",
     image: 0,
     local: true,
-    intro: "Practical care for your daily drive.",
+    intro: "We come to you — repair and diagnostics on your schedule.",
     description:
-      "Bring your vehicle to our Kapolei location for an assessment of its maintenance and repair needs. We discuss the findings and proposed work with you before getting started.",
+      "On-site mobile diagnostics and repair across Oahu. Tell us what's going on and we'll bring the right tools to your driveway, workplace, or roadside.",
     details: [
-      "Vehicle condition and maintenance assessment",
-      "Mechanical fault diagnosis",
-      "A clear explanation of the recommended work",
+      "On-site diagnostics — no shop visit required",
+      "Brake, starter, and alternator replacement at your location",
+      "Electrical fault-finding and troubleshooting",
+      "Electronic module and immobilizer support",
     ],
     prepare:
-      "Tell us the make, model, year, symptoms, and any recent repairs. Call before visiting so we can arrange a time.",
+      "Tell us your location, the make/model/year, and what you're experiencing. We'll confirm it's a good fit for a mobile visit and arrange a time.",
   },
   {
     slug: "diagnostics",
@@ -136,6 +137,43 @@ export const MARKETING_SERVICES = [
     ],
     prepare:
       "Please have proof of ownership, your vehicle details, and all available keys ready. Call to confirm availability before visiting.",
+  },
+] as const;
+
+/**
+ * The mobile-repair card grid on /services/auto-repair (merged in from
+ * the old standalone /auto-repair page). Deliberately separate from
+ * MARKETING_SERVICES above: that list drives the sitewide /services
+ * catalog, header dropdown, and home page, and covers a broader (and
+ * partly module-electronics) set of offerings this fixed 5-item list
+ * isn't part of. `icon` keys resolve through ServiceIcon
+ * (components/marketing/ui.tsx), same as MARKETING_SERVICES' own icons.
+ */
+export const MOBILE_SERVICES = [
+  {
+    icon: "monitor",
+    title: "Mobile Car Diagnostics",
+    text: "Warning lights and drivability issues diagnosed on-site with professional scan tools.",
+  },
+  {
+    icon: "disc",
+    title: "Brake Pad Replacement",
+    text: "Worn brake pads replaced at your location, front or rear.",
+  },
+  {
+    icon: "power",
+    title: "Starter Replacement",
+    text: "A no-crank or intermittent-start issue traced and the starter replaced on-site.",
+  },
+  {
+    icon: "batterycharging",
+    title: "Alternator Replacement",
+    text: "Charging-system faults diagnosed and the alternator replaced where you are.",
+  },
+  {
+    icon: "zap",
+    title: "Electrical Troubleshooting",
+    text: "Wiring, sensor, and electrical-fault diagnosis for issues other shops can't pin down.",
   },
 ] as const;
 
