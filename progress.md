@@ -1673,3 +1673,8 @@ still depends on TASK-028.
 - `SERVICE-CARD-AIRBAG`: the Airbag & System Reset card in the homepage/`/services` grid now shows four red reset-type icons and its description promoted to a bold heading, matching a supplied reference image. Reused the existing airbag photo tile.
 - `ADMIN-COVERAGE-CRUD`: `/admin/compatibility` (read-only since TASK-038, per PRD 5.3) now has manual add/edit/delete for individual entries — `lib/actions/coverage-entry.ts` plus a dialog-based UI, alongside the existing bulk import and confirm-compatibility flow. Verified with `tsc --noEmit`, a full production build, and `npm run site:test` (7/7); authenticated CRUD flows weren't exercised in a browser (no admin credentials in this session).
 - Hero banner background (Hawaiian landscape instead of snow-capped mountains) was requested but not done — no image generation/editing tool was available this session. Flagged to the user rather than faking it.
+
+## 2026-09-30 — Hero image swap + auto-repair page merge
+- `HERO-HAWAII`: the user supplied the composited hero image directly (same car/garage, Hawaiian coastal-mountain background); swapped `hero.webp` in place, no code changes needed (`next/image fill` + matching aspect ratio).
+- `AUTO-REPAIR-MERGE`: folded the standalone `/auto-repair` page's mobile-repair content and 5-card grid into `/services/auto-repair` (the shared per-service template), keeping that page's existing banner photo unchanged. Deleted the standalone page and fixed the header nav link + sitemap. Other "visit us" local services (diagnostics, hybrid-battery, keys-immobilizers) are unaffected.
+- Verified: `tsc --noEmit`, full production build (32 routes), `npm run site:test` (7/7), and screenshots of both the new hero and the merged auto-repair page.
