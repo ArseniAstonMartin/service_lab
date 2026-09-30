@@ -173,10 +173,12 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
       where: { key: RETURN_SHIPPING_FEE_KEY },
     });
     const feeAmount = feeSetting ? Number.parseInt(feeSetting.value, 10) : 0;
-    const priced = quote(selected.priceCents, feeAmount);
-    servicePriceCents = priced.servicePriceCents;
-    returnShippingFeeCents = priced.returnShippingFeeCents;
-    totalAmountCents = priced.totalCents;
+    if (selected.priceCents !== null) {
+      const priced = quote(selected.priceCents, feeAmount);
+      servicePriceCents = priced.servicePriceCents;
+      returnShippingFeeCents = priced.returnShippingFeeCents;
+      totalAmountCents = priced.totalCents;
+    }
 
     // Re-validate required answers/photos against the LIVE question set
     // for this service (not just whatever the client happened to submit
@@ -271,7 +273,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
   });
 
   let result: PlaceOrderResult;
-  if (matchResult.matched) {
+  if (matchResult.matched && servicePriceCents !== null) {
     const advanced = await advanceOrderStatus(order.id, "awaiting_payment", "system");
     result = {
       orderNumber: advanced.id.toString(),

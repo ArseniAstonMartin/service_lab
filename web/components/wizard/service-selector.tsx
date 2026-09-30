@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useWizard } from "@/components/wizard/wizard-store";
 import { useStepGuard } from "@/components/wizard/use-step-guard";
+import { TESLA_BATTERY_SERVICE } from "@/lib/domain/coverage";
 
 /**
  * /order/service: radio cards for the services confirmed on the match
@@ -70,10 +71,19 @@ export function ServiceSelector() {
                 >
                   {isSelected ? <span className="h-2 w-2 rounded-full bg-primary" /> : null}
                 </span>
-                <span className="text-sm font-medium">{service.name}</span>
+                <div>
+                  <span className="text-sm font-medium">{service.name}</span>
+                  {service.name === TESLA_BATTERY_SERVICE && (
+                    <p className="mt-1 max-w-sm text-xs text-muted-foreground">
+                      Reset for the supported 16V low-voltage battery management module.
+                      This is not a high-voltage traction battery repair. Confirm what to send
+                      with us before shipping; do not mail a battery pack.
+                    </p>
+                  )}
+                </div>
               </div>
               <span className="shrink-0 text-sm font-semibold">
-                {formatCents(service.priceCents)}
+                {service.priceCents === null ? "Quote after review" : formatCents(service.priceCents)}
               </span>
             </Card>
           );

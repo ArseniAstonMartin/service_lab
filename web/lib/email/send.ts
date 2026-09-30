@@ -107,7 +107,7 @@ async function buildEmail(
       const props: OrderSubmittedEmailProps = {
         orderNumber: order.id.toString(),
         trackingUrl: trackingUrl(order),
-        matched: order.matchedEntryId != null,
+        matched: order.matchedEntryId != null && (order.servicePriceCents ?? 0) > 0,
       };
       return {
         to: order.customerEmail,

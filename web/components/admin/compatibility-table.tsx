@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { ENTRY_SOURCE_LABELS } from "@/lib/constants";
+import { COVERAGE_SENTINEL_MODEL } from "@/lib/domain/coverage";
 
 export type CompatibilityEntryRow = {
   id: string;
@@ -55,8 +56,8 @@ export function CompatibilityTable({ entries }: { entries: CompatibilityEntryRow
           {entries.map((entry) => (
             <TableRow key={entry.id}>
               <TableCell>{entry.make}</TableCell>
-              <TableCell>{entry.model}</TableCell>
-              <TableCell>{entry.year}</TableCell>
+              <TableCell>{entry.model === COVERAGE_SENTINEL_MODEL ? "Not specified by source" : entry.model}</TableCell>
+              <TableCell>{entry.model === COVERAGE_SENTINEL_MODEL ? "—" : entry.year}</TableCell>
               <TableCell>{entry.categoryName}</TableCell>
               <TableCell className="font-mono">{entry.partNumber}</TableCell>
               <TableCell>

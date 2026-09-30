@@ -189,7 +189,7 @@ export function ShippingForm() {
         orderNumber: result.orderNumber,
         trackingToken: result.trackingToken,
         status: result.status,
-        matched: Boolean(state.serviceId),
+        matched: result.status === "awaiting_payment",
         categoryName,
         isCloning: Boolean(state.photoAnswers.original_photo || state.photoAnswers.donor_photo),
         originalPartNumber: state.answers.original_part_number ?? null,
@@ -253,6 +253,11 @@ export function ShippingForm() {
           </div>
         ) : summaryError ? (
           <p className="text-destructive">{summaryError}</p>
+        ) : serviceQuote?.quoteRequired ? (
+          <p className="text-muted-foreground">
+            Quote after review. Your selected service is supported, and our team will confirm
+            the price before sending a payment link. No payment is taken now.
+          </p>
         ) : isMatchedPath && serviceQuote ? (
           <div className="space-y-1">
             <div className="flex justify-between">
@@ -270,13 +275,13 @@ export function ShippingForm() {
           </div>
         ) : (
           <p className="text-muted-foreground">
-            Your part is going to manual review — we'll confirm the price once that's done, before
+            Your part is going to manual review — we&apos;ll confirm the price once that&apos;s done, before
             anything is charged.
           </p>
         )}
         <p className="text-xs text-muted-foreground">
           Shipping your module to us on Oahu is free. No payment is taken now — once your service
-          is confirmed, you'll get a secure payment link by email.
+          is confirmed, you&apos;ll get a secure payment link by email.
         </p>
       </Card>
 

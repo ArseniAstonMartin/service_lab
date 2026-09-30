@@ -40,7 +40,7 @@ export type CheckCompatibilityInput = z.infer<typeof checkCompatibilitySchema>;
 export type CompatibilityMatchResult = {
   matched: boolean;
   entryId: string | null;
-  services: { id: string; name: string; priceCents: number }[];
+  services: { id: string; name: string; priceCents: number | null }[];
 };
 
 function toClientMatchResult(result: MatchResult): CompatibilityMatchResult {

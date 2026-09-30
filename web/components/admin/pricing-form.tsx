@@ -262,7 +262,7 @@ export function PricingForm({
                       </Select>
                     </TableCell>
                     <TableCell>
-                      {selectedAmount != null ? formatCents(selectedAmount) : "—"}
+                {selectedAmount != null && selectedAmount > 0 ? formatCents(selectedAmount) : "Quote after review"}
                     </TableCell>
                     <TableCell>
                       <Button

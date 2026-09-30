@@ -13,6 +13,7 @@
     "coverage:apply": "node --import tsx scripts/coverage-import.ts --replace",
     "coverage:import": "node --import tsx scripts/coverage-import.ts",
     "coverage:test": "node --import tsx --test scripts/coverage/*.test.ts",
+    "coverage:tesla": "node --import tsx scripts/repair-tesla-coverage.ts",
     "site:test": "node --import tsx --test scripts/site/*.test.ts",
     "site:e2e": "playwright test",
     "vercel-build": "if [ \"$VERCEL_ENV\" = \"production\" ]; then prisma generate && prisma migrate deploy && next build; else prisma generate && next build; fi"

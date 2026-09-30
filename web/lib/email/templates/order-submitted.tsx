@@ -31,9 +31,8 @@ export function OrderSubmittedEmail({ orderNumber, trackingUrl, matched }: Order
         </p>
       ) : (
         <p style={{ margin: "0 0 12px" }}>
-          We couldn&apos;t automatically confirm compatibility for your part number, so our team is
-          reviewing it manually. We&apos;ll email you a payment link as soon as compatibility is
-          confirmed.
+          Our team is reviewing your request before confirming the service and price.
+          We&apos;ll email you the next steps and a payment link once the review is complete.
         </p>
       )}
       <p style={{ margin: "0 0 12px" }}>Track your order status anytime with the link below.</p>

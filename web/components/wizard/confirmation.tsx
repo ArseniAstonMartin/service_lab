@@ -82,8 +82,8 @@ export function Confirmation() {
         ) : (
           <p className="flex items-center justify-center gap-1.5 text-sm">
             <Clock className="h-4 w-4 shrink-0 text-muted-foreground" />
-            Your part number wasn&apos;t in our database, so it&apos;s going to manual review.
-            We&apos;ll email you as soon as it&apos;s confirmed, with pricing and a payment link.
+            Your request needs review before we confirm the service and price.
+            We&apos;ll email you the next steps once the review is complete.
           </p>
         )}
       </Card>
@@ -105,7 +105,12 @@ export function Confirmation() {
         </div>
       </Card>
 
-      {result.isCloning ? (
+      {!result.matched ? (
+        <Card className="space-y-1 p-4 text-sm">
+          <h2 className="text-sm font-semibold">Before shipping</h2>
+          <p className="text-muted-foreground">Wait for our confirmation and packing instructions before sending a module.</p>
+        </Card>
+      ) : result.isCloning ? (
         <Card className="space-y-2 p-4 text-sm">
           <h2 className="text-sm font-semibold">What to ship us</h2>
           <p className="text-muted-foreground">Cloning needs both modules in the same box:</p>

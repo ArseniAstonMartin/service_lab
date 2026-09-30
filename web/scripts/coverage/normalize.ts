@@ -3,10 +3,10 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import * as XLSX from "xlsx";
 import { coverageMake, coverageName, coverageText, coverageYears, validateCoveragePart } from "../../lib/domain/coverage-validation";
-import { COVERAGE_SENTINEL_MODEL, COVERAGE_SENTINEL_YEAR } from "../../lib/domain/coverage";
+import { BATTERY_CATEGORY, TESLA_BATTERY_SERVICE, COVERAGE_SENTINEL_MODEL, COVERAGE_SENTINEL_YEAR } from "../../lib/domain/coverage";
 
 export type VehicleRow = { make: string; model: string; year: number };
-export type Origin = { file: string; sheet: string; row: number; rawPart: string; method: string; conditional: boolean };
+export type Origin = { file: string; sheet: string; row: number; rawPart: string; method: string; conditional: boolean; system: string; voltage: string };
 export type CoverageRow = VehicleRow & { category: string; partNumber: string; services: string[]; origins: Origin[] };
 export const vehicleKey = (v: VehicleRow) => JSON.stringify([v.make, v.model, v.year]);
 export const entryKey = (v: VehicleRow & { category: string; partNumber: string }) => JSON.stringify([v.make, v.model, v.year, v.category, v.partNumber]);
@@ -42,10 +42,14 @@ export function readSheet(sheet: XLSX.WorkSheet) {
   return { rows, headerIndex, headers };
 }
 
-function categoryFor(file: string, system: string): string | null {
-  if (/CRASH RESET\/AIRBAG/i.test(file)) return "Airbag/SRS";
-  if (/Test Platform\/Dashboard/i.test(file)) return "Instrument Cluster";
+function categoryFor(file: string, system: string, make: string): string | null {
   const s = coverageText(system).toUpperCase();
+  if (make === "Tesla" && s === "VCFRONT") return "BCM";
+  if (/CRASH RESET\/BATTERY RESET/i.test(file) && /^(?:BMS|BMSH|BMSL|HV BATTERY|BCSM|MVBM)$/.test(s)) return BATTERY_CATEGORY;
+  // The airbag workbook also contains non-SRS systems (Tesla TAS/VCFRONT).
+  // Its filename is not evidence that those are restraint modules.
+  if (/CRASH RESET\/AIRBAG/i.test(file) && (!s || /^(?:AIRBAG|SRS)$/.test(s))) return "Airbag/SRS";
+  if (/Test Platform\/Dashboard/i.test(file)) return "Instrument Cluster";
   if (/^(?:AIRBAG|SRS)$/.test(s)) return "Airbag/SRS";
   if (/^(?:ECM|PCM|ECU|ENGINE CONTROL MODULE)$/.test(s)) return "ECM/PCM";
   if (/^(?:TCM|TCU|TRANSMISSION)$/.test(s)) return "TCM/TCU";
@@ -60,11 +64,33 @@ export function normalizeCoverage(root: string, asOfYear: number) {
   const issues: { file: string; sheet: string; row: number; reason: string; values: unknown[] }[] = [];
   const manifest: { file: string; sha256: string; sheets: { name: string; headers: string[]; rows: number }[] }[] = [];
   const ignoredFiles: string[] = [];
+  const vehicleReferences: { file: string; sha256: string; retrievedAt: string; records: number }[] = [];
   const reasons: Record<string, number> = {};
   const stats = { files: 0, sheets: 0, nonemptyRows: 0, acceptedPartRows: 0, skippedPartRows: 0, duplicateEntries: 0, vehicleSourceRows: 0, openYearVehicleRows: 0 };
   const addVehicle = (v: VehicleRow) => vehicles.set(vehicleKey(v), v);
+  // These sheets omit Tesla model/year entirely. A checked-in NHTSA snapshot
+  // supplies vehicle identity independently; it NEVER fans part numbers out
+  // to models or grants service support. Invalid snapshots fail before writes.
+  const referenceFile = path.join(root, "reference/tesla-vehicles.json");
+  if (fs.existsSync(referenceFile)) {
+    const bytes = fs.readFileSync(referenceFile);
+    const snapshot = JSON.parse(bytes.toString()) as { schemaVersion: number; make: string; retrievedAt: string; observations: { year: number; url: string; models: string[] }[] };
+    if (snapshot.schemaVersion !== 1 || snapshot.make !== "Tesla" || !Array.isArray(snapshot.observations)) throw new Error("Invalid Tesla vehicle reference");
+    let records = 0;
+    for (const observation of snapshot.observations) {
+      if (!Number.isInteger(observation.year) || observation.year < 2008 || observation.year > asOfYear || observation.url !== `https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/tesla/modelyear/${observation.year}?format=json` || !Array.isArray(observation.models)) throw new Error("Invalid Tesla vehicle reference observation");
+      for (const rawModel of observation.models) {
+        const model = coverageName(rawModel);
+        if (!model || typeof rawModel !== "string") throw new Error("Invalid Tesla reference model");
+        addVehicle({ make: "Tesla", model, year: observation.year });
+        records++;
+      }
+    }
+    vehicleReferences.push({ file: "reference/tesla-vehicles.json", sha256: createHash("sha256").update(bytes).digest("hex"), retrievedAt: snapshot.retrievedAt, records });
+  }
   for (const full of discover(root)) {
     const file = path.relative(root, full).replace(/\\/g, "/");
+    if (full === referenceFile) continue;
     if (!/\.(xlsx|xls)$/i.test(file) || path.basename(file).startsWith("~$")) { ignoredFiles.push(file); continue; }
     const buffer = fs.readFileSync(full);
     // Parsing errors abort the entire run, including a replacement. Never clear
@@ -110,18 +136,26 @@ export function normalizeCoverage(root: string, asOfYear: number) {
         const validated = validateCoveragePart(rawPart);
         if (!validated) { reject(coverageText(rawPart) ? "invalid_part_number" : "empty_part_number"); continue; }
         if (!make) { reject("missing_or_ambiguous_make"); continue; }
-        const category = categoryFor(file, String(row[index("module", "system", "system/platform")] ?? ""));
+        const system = coverageText(row[index("module", "system", "system/platform")]);
+        const voltage = coverageText(row[index("voltage")]);
+        const category = categoryFor(file, system, make);
         if (!category) { reject("unsupported_module_category"); continue; }
         const conditional = validated.conditional || /\b(?:PARTIALLY|BETA|LOCKED|ONLY|EXCEPT)\b/i.test(row.map(coverageText).join(" "));
         const services: string[] = [];
         // No inference from read/write, repair(reset), dashboard tests, or CS.
         if (!conditional && category === "Airbag/SRS" && supported(row[index("erasecrash", "clearcrash")])) services.push("Crash Data Reset");
         if (!conditional && category === "ECM/PCM" && supported(row[index("writevin")])) services.push("ECM VIN Write");
-        const origin = { file, sheet: name, row: r + 1, rawPart, conditional, method: coverageText(row[index("method", "commmode")]) };
+        if (!conditional && category === BATTERY_CATEGORY && make === "Tesla" && system.toUpperCase() === "BMS" && voltage.replace(/\s/g, "").toUpperCase() === "16V" && supported(row[index("erasecrash", "clearcrash")])) services.push(TESLA_BATTERY_SERVICE);
+        const origin = { file, sheet: name, row: r + 1, rawPart, conditional, system, voltage, method: coverageText(row[index("method", "commmode")]) };
+        // This vendor joins a Tesla OEM identifier and its Bosch identifier in
+        // one cell. Keep the OEM identifier, preserving the full cell above.
+        const teslaBosch = make === "Tesla" && coverageText(row[index("ecumanufacture")]).toUpperCase() === "BOSCH"
+          ? /^(\d{7}-\d{2}-[A-Z])-028\d{7}$/.exec(validated.partNumber) : null;
+        const partNumber = teslaBosch?.[1] ?? validated.partNumber;
         let applications: VehicleRow[];
         if (model && years.length && !/\d{4}\s*[-–—]\s*$/.test(coverageText(row[yearIndex]))) {
           applications = years.map((year) => ({ make, model, year }));
-        } else if (category === "Airbag/SRS" && modelIndex < 0 && yearIndex < 0) {
+        } else if (/CRASH RESET\//i.test(file) && modelIndex < 0 && yearIndex < 0) {
           // Existing schema's private brand/part container; NEVER shown as a
           // real model/year. Matching is restricted to this make and part.
           applications = [{ make, model: COVERAGE_SENTINEL_MODEL, year: COVERAGE_SENTINEL_YEAR }];
@@ -129,7 +163,7 @@ export function normalizeCoverage(root: string, asOfYear: number) {
         stats.acceptedPartRows++;
         for (const application of applications) {
           addVehicle(application);
-          const candidate: CoverageRow = { ...application, category, partNumber: validated.partNumber, services, origins: [origin] };
+          const candidate: CoverageRow = { ...application, category, partNumber, services, origins: [origin] };
           const key = entryKey(candidate);
           const previous = entries.get(key);
           if (previous) {
@@ -147,7 +181,7 @@ export function normalizeCoverage(root: string, asOfYear: number) {
   const sortedEntries = [...entries.values()].sort((a, b) => entryKey(a).localeCompare(entryKey(b)));
   if (stats.nonemptyRows !== stats.acceptedPartRows + stats.skippedPartRows) throw new Error("Row accounting mismatch");
   return {
-    policyVersion: 1, asOfYear, vehicles: sortedVehicles, entries: sortedEntries, issues, manifest, ignoredFiles,
+    policyVersion: 2, asOfYear, vehicles: sortedVehicles, entries: sortedEntries, issues, manifest, vehicleReferences, ignoredFiles,
     summary: { ...stats, reasons, vehicles: sortedVehicles.length, publicVehicles: sortedVehicles.filter((v) => v.model !== COVERAGE_SENTINEL_MODEL).length, entries: sortedEntries.length, confirmedEntries: sortedEntries.filter((v) => v.services.length).length, reviewOnlyEntries: sortedEntries.filter((v) => !v.services.length).length },
   };
 }

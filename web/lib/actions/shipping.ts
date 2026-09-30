@@ -7,9 +7,14 @@ import { quote, type Quote } from "@/lib/domain/quote";
 
 const RETURN_SHIPPING_FEE_KEY = "return_shipping_fee_cents";
 
-export type ServiceQuote = Quote & {
-  service: { id: string; name: string; priceCents: number };
-};
+export type ServiceQuote = {
+  service: { id: string; name: string; priceCents: number | null };
+} & ((Quote & { quoteRequired: false }) | {
+  quoteRequired: true;
+  servicePriceCents: null;
+  returnShippingFeeCents: null;
+  totalCents: null;
+});
 
 const getQuoteSchema = z.object({
   serviceId: z.string().min(1),
@@ -44,6 +49,9 @@ export async function getQuote(serviceId: string): Promise<ServiceQuote> {
   if (!service) {
     throw new Error("Service not found");
   }
+  if (service.priceTier.amountCents <= 0) {
+    return { service: { id: service.id.toString(), name: service.name, priceCents: null }, quoteRequired: true, servicePriceCents: null, returnShippingFeeCents: null, totalCents: null };
+  }
 
   const feeSetting = await prisma.appSetting.findUnique({
     where: { key: RETURN_SHIPPING_FEE_KEY },
@@ -57,6 +65,7 @@ export async function getQuote(serviceId: string): Promise<ServiceQuote> {
   const priced = quote(service.priceTier.amountCents, returnShippingFeeCents);
 
   return {
+    quoteRequired: false,
     service: {
       id: service.id.toString(),
       name: service.name,

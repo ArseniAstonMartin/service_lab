@@ -195,6 +195,35 @@ npm run coverage:import -- --purge-only
 ```
 
 `coverage:convert` aliases the dry run; `coverage:apply` aliases replacement.
+
+### Targeted Tesla coverage repair
+
+From `web/`, run `npm run coverage:tesla` for a local preview, then
+`npm run coverage:tesla -- --apply` to back up and reconcile only Tesla import
+records in one transaction. Re-running preserves IDs, admin-confirmed entries,
+existing prices, historical order state and all other makes. Private backups,
+source coordinates and verification reports live in `web/data/coverage-import/tesla-*`.
+Deploy the accompanying checkout changes **before** applying unpriced services.
+
+The Airbag workbook contains 23 SRS rows (22 distinct OEM parts), one VCFRONT
+body controller retained for review under BCM, and one unsupported TAS row
+quarantined. Combined Tesla/Bosch cells are normalized to their Tesla OEM number;
+the complete source cell remains in the audit report. Battery Reset's four
+Tesla parts (`1598486-00-D`, `1598486-00-F`, `1598486-00-G`, `1598486-99-D`)
+map to **Battery/BMS → Tesla Battery Reset**, only with explicit BMS, 16V and
+crash-erase support. Read/write or DTC support alone cannot grant this service.
+
+Neither workbook provides model/year. The independent NHTSA reference in
+`coverage_sources/reference/` supplies dropdown identities without inventing
+part fitment. Matching still requires the same make, exact OEM part, category
+and supported operation; unknown combinations require review.
+
+The new `TESLA_BAT` price tier starts unconfigured. Customers see **Quote after
+review**, and orders remain `pending_review` without a payment link or price
+snapshot. Admins set the amount or service tier in `/admin/pricing`; imports
+never overwrite it. A positive service price is required before confirming
+payment. Battery Reset has its own questions and concerns the supported 16V
+low-voltage management module, not high-voltage battery-pack repair.
 They no longer consume the legacy generated CSVs. The old conversion/apply
 script paths delegate to this same pipeline. Curated CSVs can still use
 the admin import screen, which now also validates part numbers.

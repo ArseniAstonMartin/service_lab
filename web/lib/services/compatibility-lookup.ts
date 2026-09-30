@@ -76,6 +76,6 @@ export function servicesFromEntry(entry: NonNullable<CompatibilityLookupEntry>) 
   return entry.services.map((link) => ({
     id: link.service.id.toString(),
     name: link.service.name,
-    priceCents: link.service.priceTier.amountCents,
+    priceCents: link.service.priceTier.amountCents > 0 ? link.service.priceTier.amountCents : null,
   }));
 }

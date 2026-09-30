@@ -21,6 +21,7 @@
  * `npx prisma db seed` (or `npm run db:seed`).
  */
 import { PrismaClient, EntrySource, QuestionAnswerType } from "@prisma/client";
+import { ensureTeslaBatteryCatalog } from "./tesla-battery-catalog";
 
 const prisma = new PrismaClient();
 
@@ -281,6 +282,12 @@ async function main() {
   await seedServices(categoryIdByName);
   await seedQuestionDefinitions();
   await seedAppSettings();
+  // New service pricing must be supplied explicitly; a repeat seed preserves
+  // its current admin-configured price and never invents a customer charge.
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(78392410)`;
+    await ensureTeslaBatteryCatalog(tx, process.env.TESLA_BATTERY_PRICE_CENTS ? Number(process.env.TESLA_BATTERY_PRICE_CENTS) : undefined);
+  });
 
   const allowSample = process.env.SEED_SAMPLE === "true" && process.env.VERCEL_ENV !== "production";
   if (allowSample) {

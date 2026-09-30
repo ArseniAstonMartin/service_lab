@@ -19,6 +19,10 @@ export interface Quote {
  * the lab is always free and never appears here.
  */
 export function quote(tierAmountCents: number, returnFeeCents: number): Quote {
+  if (!Number.isSafeInteger(tierAmountCents) || tierAmountCents <= 0) {
+    throw new Error("Set a positive service price in Pricing before confirming payment.");
+  }
+  if (!Number.isSafeInteger(returnFeeCents) || returnFeeCents < 0) throw new Error("Invalid return shipping fee.");
   return {
     servicePriceCents: tierAmountCents,
     returnShippingFeeCents: returnFeeCents,

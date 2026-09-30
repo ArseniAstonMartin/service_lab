@@ -16,7 +16,7 @@ export type WizardVehicle = {
 export type WizardMatchedService = {
   id: string;
   name: string;
-  priceCents: number;
+  priceCents: number | null;
 };
 
 export type WizardMatchResult = {

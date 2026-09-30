@@ -7,6 +7,7 @@ import * as XLSX from "xlsx";
 import { coverageMake, coverageName, coverageYears, validateCoveragePart } from "../../lib/domain/coverage-validation";
 import { normalizeCoverage, readSheet } from "./normalize";
 import { validateImportRow } from "../../lib/domain/import";
+import { BATTERY_CATEGORY, TESLA_BATTERY_SERVICE, COVERAGE_SENTINEL_MODEL } from "../../lib/domain/coverage";
 
 test("OEM validation rejects column drift, placeholders, ECU/chip codes and Excel errors", () => {
   for (const value of ["", "✔", "TYPE1", "2012-2017", "BENCH", "TC1797", "R7F7010123", "EDC17C64", "READ EEPROM 12345", "#REF!", "1234E+12", "000000", "A".repeat(101), "A0999004101/A0999008300"]) {
@@ -69,4 +70,74 @@ test("admin CSV validation cannot reintroduce type codes or strip conditional su
     const result = validateImportRow({ Make: "Audi", Model: "A3", Year: "2020", Category: "Airbag/SRS", "Part Number": part, "Crash Data Reset": "x" }, 2, ["Airbag/SRS"], ["Crash Data Reset"]);
     assert.ok("error" in result);
   }
+});
+
+test("Tesla battery reset requires a valid OEM part, BMS system, 16V and explicit crash erase", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tesla-coverage-"));
+  try {
+    const dir = path.join(root, "OBD Star G3/CRASH RESET");
+    fs.mkdirSync(dir, { recursive: true });
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["Brand", "System", "Part Number", "VOLTAGE", "Method", "Erase Crash", "Write EEPROM", "Erase DTC"],
+      ["TESLA", "BMS", "1598486-00-D", "16V", "JTAG", "✔"],
+      ["TESLA", "BMS", "1598486-00-F", "16V", "JTAG", "", "✔", "✔"],
+      ["TESLA", "BMS", "1598486-00-G(PARTIALLY)", "16V", "JTAG", "✔"],
+      ["TESLA", "BMS", "1598486-99-D", "400V", "JTAG", "✔"],
+      ["TESLA", "BMS", "", "16V", "JTAG", "✔"],
+      ["TESLA", "BMS", "TYPE1", "16V", "JTAG", "✔"],
+      ["AUDI", "BMS", "4N0915105F", "48V", "BENCH", "✔"],
+    ]), "Battery");
+    XLSX.writeFile(workbook, path.join(dir, "BATTERY RESET.xlsx"));
+    const result = normalizeCoverage(root, 2026);
+    assert.equal(result.entries.length, 5);
+    assert.equal(result.summary.confirmedEntries, 1);
+    const supported = result.entries.find((e) => e.partNumber === "1598486-00-D")!;
+    assert.equal(supported.category, BATTERY_CATEGORY);
+    assert.equal(supported.model, COVERAGE_SENTINEL_MODEL);
+    assert.deepEqual(supported.services, [TESLA_BATTERY_SERVICE]);
+    assert.equal(supported.origins[0].voltage, "16V");
+    assert.equal(supported.origins[0].method, "JTAG");
+    assert.equal(result.summary.publicVehicles, 0);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("Tesla combined OEM/Bosch identifiers merge conservatively and non-SRS rows cannot gain SRS reset", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tesla-airbag-"));
+  try {
+    const dir = path.join(root, "OBD Star G3/CRASH RESET");
+    fs.mkdirSync(dir, { recursive: true });
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["Brand", "Module", "Part Number", "ECU Manufacture", "Erase Crash"],
+      ["TESLA", "SRS", "1512876-00-D-0285015427", "BOSCH", "✔"],
+      ["TESLA", "SRS", "1512876-00-D-0285020422", "BOSCH", ""],
+      ["TESLA", "VCFRONT", "1516640-03-E", "", "✔"],
+      ["TESLA", "TAS", "1033174-01-F", "", "✔"],
+    ]), "Airbag");
+    XLSX.writeFile(workbook, path.join(dir, "AIRBAG RESET.xlsx"));
+    const result = normalizeCoverage(root, 2026);
+    assert.equal(result.entries.length, 2);
+    const srs = result.entries.find((e) => e.category === "Airbag/SRS")!;
+    assert.equal(srs.partNumber, "1512876-00-D");
+    assert.equal(srs.origins.length, 2);
+    assert.deepEqual(srs.services, []);
+    const body = result.entries.find((e) => e.partNumber === "1516640-03-E")!;
+    assert.equal(body.category, "BCM");
+    assert.deepEqual(body.services, []);
+    assert.equal(result.summary.reasons.unsupported_module_category, 1);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("real Tesla sources supply all four battery parts, and reference vehicles never become fitment claims", () => {
+  const root = path.resolve(import.meta.dirname, "../../../coverage_sources");
+  const result = normalizeCoverage(root, 2026);
+  const battery = result.entries.filter((e) => e.make === "Tesla" && e.category === BATTERY_CATEGORY);
+  assert.deepEqual(battery.map((e) => e.partNumber).sort(), ["1598486-00-D", "1598486-00-F", "1598486-00-G", "1598486-99-D"]);
+  assert.ok(battery.every((e) => e.model === COVERAGE_SENTINEL_MODEL && e.services.includes(TESLA_BATTERY_SERVICE)));
+  assert.ok(result.vehicles.some((v) => v.make === "Tesla" && v.model === "MODEL Y" && v.year === 2024));
+  assert.ok(result.vehicles.some((v) => v.make === "Tesla" && v.model === "MODEL 3" && v.year === 2018));
+  assert.ok(!result.vehicles.some((v) => v.make === "Tesla" && v.model === "MODEL Y" && v.year === 2018));
+  assert.equal(result.entries.filter((e) => e.make === "Tesla" && e.model !== COVERAGE_SENTINEL_MODEL).length, 0);
+  assert.equal(result.vehicleReferences[0].records, 56);
 });

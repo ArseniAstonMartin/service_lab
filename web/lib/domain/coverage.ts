@@ -6,3 +6,6 @@
 
 export const COVERAGE_SENTINEL_MODEL = "All";
 export const COVERAGE_SENTINEL_YEAR = 2000;
+
+export const BATTERY_CATEGORY = "Battery/BMS";
+export const TESLA_BATTERY_SERVICE = "Tesla Battery Reset";

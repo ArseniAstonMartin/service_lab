@@ -13,7 +13,8 @@ export type EntityId = string | number | bigint;
 export interface ServiceSummary {
   id: EntityId;
   name: string;
-  priceCents: number;
+  /** Null means supported but requires a price quote before payment. */
+  priceCents: number | null;
 }
 
 export interface CompatibilityEntrySummary {

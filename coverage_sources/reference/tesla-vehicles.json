@@ -1,0 +1,178 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Vehicle selection only; does not establish part fitment or service support",
+  "make": "Tesla",
+  "retrievedAt": "2026-09-30T10:52:13.890Z",
+  "observations": [
+    {
+      "year": 2008,
+      "url": "https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/tesla/modelyear/2008?format=json",
+      "models": [
+        "Roadster"
+      ]
+    },
+    {
+      "year": 2009,
+      "url": "https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/tesla/modelyear/2009?format=json",
+      "models": [
+        "Roadster"
+      ]
+    },
+    {
+      "year": 2010,
+      "url": "https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/tesla/modelyear/2010?format=json",
+      "models": [
+        "Roadster"
+      ]
+    },
+    {
+      "year": 2011,
+      "url": "https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/tesla/modelyear/2011?format=json",
+      "models": [
+        "Roadster"
+      ]
+    },
+    {
+      "year": 2012,
+      "url": "https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/tesla/modelyear/2012?format=json",
+      "models": [
+        "Model S",
+        "Roadster"
+      ]
+    },
+    {
+      "year": 2013,
+      "url": "https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/tesla/modelyear/2013?format=json",
+      "models": [
+        "Model S"
+      ]
+    },
+    {
+      "year": 2014,
+      "url": "https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/tesla/modelyear/2014?format=json",
+      "models": [
+        "Model S"
+      ]
+    },
+    {
+      "year": 2015,
+      "url": "https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/tesla/modelyear/2015?format=json",
+      "models": [
+        "Model S"
+      ]
+    },
+    {
+      "year": 2016,
+      "url": "https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/tesla/modelyear/2016?format=json",
+      "models": [
+        "Model S",
+        "Model X"
+      ]
+    },
+    {
+      "year": 2017,
+      "url": "https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/tesla/modelyear/2017?format=json",
+      "models": [
+        "Model 3",
+        "Model S",
+        "Model X"
+      ]
+    },
+    {
+      "year": 2018,
+      "url": "https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/tesla/modelyear/2018?format=json",
+      "models": [
+        "Model 3",
+        "Model S",
+        "Model X"
+      ]
+    },
+    {
+      "year": 2019,
+      "url": "https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/tesla/modelyear/2019?format=json",
+      "models": [
+        "Model 3",
+        "Model S",
+        "Model X"
+      ]
+    },
+    {
+      "year": 2020,
+      "url": "https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/tesla/modelyear/2020?format=json",
+      "models": [
+        "Model 3",
+        "Model S",
+        "Model X",
+        "Model Y"
+      ]
+    },
+    {
+      "year": 2021,
+      "url": "https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/tesla/modelyear/2021?format=json",
+      "models": [
+        "Model 3",
+        "Model S",
+        "Model X",
+        "Model Y"
+      ]
+    },
+    {
+      "year": 2022,
+      "url": "https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/tesla/modelyear/2022?format=json",
+      "models": [
+        "Model 3",
+        "Model S",
+        "Model X",
+        "Model Y"
+      ]
+    },
+    {
+      "year": 2023,
+      "url": "https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/tesla/modelyear/2023?format=json",
+      "models": [
+        "Model 3",
+        "Model S",
+        "Model X",
+        "Model Y",
+        "Semi"
+      ]
+    },
+    {
+      "year": 2024,
+      "url": "https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/tesla/modelyear/2024?format=json",
+      "models": [
+        "Cybertruck",
+        "Model 3",
+        "Model S",
+        "Model X",
+        "Model Y",
+        "Semi"
+      ]
+    },
+    {
+      "year": 2025,
+      "url": "https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/tesla/modelyear/2025?format=json",
+      "models": [
+        "Cybertruck",
+        "Model 3",
+        "Model S",
+        "Model X",
+        "Model Y",
+        "Semi"
+      ]
+    },
+    {
+      "year": 2026,
+      "url": "https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/tesla/modelyear/2026?format=json",
+      "models": [
+        "Cybercab",
+        "Cybertruck",
+        "Model 3",
+        "Model S",
+        "Model X",
+        "Model Y",
+        "Semi"
+      ]
+    }
+  ]
+}

@@ -9,10 +9,10 @@ export default async function OrderVehiclePage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-lg font-semibold">What's your vehicle?</h1>
+        <h1 className="text-lg font-semibold">What&apos;s your vehicle?</h1>
         <p className="text-sm text-muted-foreground">
-          We only list makes, models and years we currently have compatibility
-          data for.
+          Select your vehicle. We confirm service support separately using the
+          exact module part number and requested operation.
         </p>
       </div>
       <VehicleSelector makes={makes} />

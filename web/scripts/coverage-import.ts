@@ -186,7 +186,7 @@ async function main() {
     console.log(`Replacement committed in ${databaseSeconds}s. Orders preserved: ${result.preservedOrders}.`);
     // Refresh planner statistics after replacing most of the table contents.
     await prisma.$executeRawUnsafe("ANALYZE vehicles, compatibility_entries, compatibility_services");
-    const report = { mode, batchSize: BATCH_SIZE, normalizationSeconds, databaseSeconds, inputDigest: normalized ? createHash("sha256").update(JSON.stringify(normalized.manifest)).digest("hex") : null, normalization: normalized?.summary, database: result };
+    const report = { mode, batchSize: BATCH_SIZE, normalizationSeconds, databaseSeconds, inputDigest: normalized ? createHash("sha256").update(JSON.stringify({ workbooks: normalized.manifest, vehicleReferences: normalized.vehicleReferences })).digest("hex") : null, normalization: normalized?.summary, database: result };
     writePrivate(path.join(runDir, "report.json"), report);
     console.log("Committed:", stringify(report));
     console.log(`Reports and backup: ${runDir}`);

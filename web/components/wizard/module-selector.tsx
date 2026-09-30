@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import {
   CircuitBoard,
+  BatteryCharging,
   Cpu,
   Gauge,
   Settings2,
@@ -29,6 +30,7 @@ const CATEGORY_ICONS: Record<string, LucideIcon> = {
   "TCM/TCU": Settings2,
   BCM: CircuitBoard,
   "Instrument Cluster": Gauge,
+  "Battery/BMS": BatteryCharging,
 };
 
 function iconFor(name: string): LucideIcon {
