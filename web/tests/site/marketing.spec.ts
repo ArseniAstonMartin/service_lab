@@ -47,11 +47,24 @@ test("mobile navigation, appointment details and contact validation", async ({ p
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-test("directory uses real coverage and preserves manual-review cases", async ({ page }) => {
+test("directory search summarizes real coverage without listing raw catalog rows", async ({ page }) => {
   await page.goto("/ecu-models");
-  await expect(page.locator(".m-directory-table tbody tr")).toHaveCount(20);
-  await expect(page.locator(".m-directory-status")).toContainText("matching entries");
-  await expect(page.locator(".m-directory-table")).not.toContainText("All · 2000");
+  // No raw table anywhere on the page, searched or not — the full
+  // 16,000+ row catalog is admin-only (/admin/compatibility); the
+  // public page only ever shows a match count plus a CTA into the
+  // order wizard, which re-verifies the exact part number itself.
+  await expect(page.locator(".m-directory-table")).toHaveCount(0);
+
+  const makeOptions = await page.locator("#directory-make option").allTextContents();
+  const realMake = makeOptions.find((name) => name !== "All makes");
+  expect(realMake, "directory make dropdown should list at least one real make").toBeTruthy();
+  await page.locator("#directory-make").selectOption({ label: realMake! });
+  await page.getByRole("button", { name: "Search Directory" }).click();
+  await expect(page.getByRole("heading", { name: /matching entr(y|ies)/ })).toBeVisible();
+  await expect(page.locator(".m-directory-table")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Check Your Module" })).toBeVisible();
+
+  await page.locator("#directory-make").selectOption({ label: "All makes" });
   await page.locator("#directory-query").fill("NO-MATCH-TEST-9X");
   await page.getByRole("button", { name: "Search Directory" }).click();
   await expect(page.getByRole("heading", { name: "No matching modules found." })).toBeVisible();
