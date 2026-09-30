@@ -1668,3 +1668,8 @@ still depends on TASK-028.
 - `MOBILE-AUTO-REPAIR`: `/auto-repair` reframed around mobile/on-site service (was a fixed-shop visit page), with a new 5-card grid (diagnostics, brakes, starter, alternator, electrical).
 - `CHECKOUT-STREAMLINE`: vehicle, module and part number/photo are now one combined `/order/vehicle` step instead of three separate pages; old `/order/module`/`/order/compatibility` redirect there. Fixed a hydration-timing bug the merge would have introduced (stale pre-hydration local state on first mount).
 - Verified: `tsc --noEmit`, full production build, `npm run site:test` (7/7), and the full Playwright suite (`tesla.spec.ts` + `marketing.spec.ts`, 7/7, both updated for the new behavior).
+
+## 2026-09-30 — Homepage service card redesign + admin coverage CRUD
+- `SERVICE-CARD-AIRBAG`: the Airbag & System Reset card in the homepage/`/services` grid now shows four red reset-type icons and its description promoted to a bold heading, matching a supplied reference image. Reused the existing airbag photo tile.
+- `ADMIN-COVERAGE-CRUD`: `/admin/compatibility` (read-only since TASK-038, per PRD 5.3) now has manual add/edit/delete for individual entries — `lib/actions/coverage-entry.ts` plus a dialog-based UI, alongside the existing bulk import and confirm-compatibility flow. Verified with `tsc --noEmit`, a full production build, and `npm run site:test` (7/7); authenticated CRUD flows weren't exercised in a browser (no admin credentials in this session).
+- Hero banner background (Hawaiian landscape instead of snow-capped mountains) was requested but not done — no image generation/editing tool was available this session. Flagged to the user rather than faking it.
