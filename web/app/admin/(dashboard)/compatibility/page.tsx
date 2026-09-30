@@ -4,7 +4,8 @@ import { prisma } from "@/lib/db";
 import { ENTRY_SOURCE_LABELS } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { CompatibilityFilterBar } from "@/components/admin/compatibility-filter-bar";
-import { CompatibilityTable, type CompatibilityEntryRow } from "@/components/admin/compatibility-table";
+import { CompatibilityAdminPanel } from "@/components/admin/compatibility-admin-panel";
+import type { CompatibilityEntryRow } from "@/components/admin/compatibility-table";
 import { OrdersPagination } from "@/components/admin/orders-pagination";
 
 const PAGE_SIZE = 20;
@@ -18,10 +19,14 @@ type SearchParams = {
 };
 
 /**
- * /admin/compatibility -- read-only, searchable compatibility database
- * (TASK-038). Same filters-live-in-the-URL / Server Component pattern as
- * /admin/orders (TASK-030): this page re-reads searchParams and re-runs
- * the Prisma query on every navigation, no client-side row state.
+ * /admin/compatibility -- the searchable compatibility database, plus
+ * manual add/edit/delete (CompatibilityAdminPanel) for individual
+ * entries -- the "secondary, not MVP-blocking" manual CRUD PRD 5.3
+ * deferred when this page first shipped read-only (TASK-038). Same
+ * filters-live-in-the-URL / Server Component pattern as /admin/orders
+ * (TASK-030): this page re-reads searchParams and re-runs the Prisma
+ * query on every navigation, no client-side row state -- the panel's
+ * own dialogs call router.refresh() after a mutation to re-trigger that.
  */
 export default async function AdminCompatibilityPage({
   searchParams,
@@ -48,7 +53,7 @@ export default async function AdminCompatibilityPage({
 
   const where = buildWhere({ q, make, categoryId, source });
 
-  const [entries, total, categories, makeRows] = await Promise.all([
+  const [entries, total, categories, makeRows, services] = await Promise.all([
     prisma.compatibilityEntry.findMany({
       where,
       include: {
@@ -72,6 +77,10 @@ export default async function AdminCompatibilityPage({
       select: { make: true },
       orderBy: { make: "asc" },
     }),
+    // The full service catalog (small, fixed set) for the add/edit
+    // dialog's per-category checkbox list -- same "load it all, filter
+    // client-side" approach /admin/pricing already uses.
+    prisma.service.findMany({ orderBy: { name: "asc" } }),
   ]);
 
   const rows: CompatibilityEntryRow[] = entries.map((entry) => ({
@@ -79,6 +88,7 @@ export default async function AdminCompatibilityPage({
     make: entry.vehicle.make,
     model: entry.vehicle.model,
     year: entry.vehicle.year,
+    categoryId: entry.categoryId.toString(),
     categoryName: entry.category.name,
     partNumber: entry.partNumber,
     services: entry.services.map((link) => ({
@@ -111,7 +121,18 @@ export default async function AdminCompatibilityPage({
           name: category.name,
         }))}
       />
-      <CompatibilityTable entries={rows} />
+      <CompatibilityAdminPanel
+        entries={rows}
+        categories={categories.map((category) => ({
+          id: category.id.toString(),
+          name: category.name,
+        }))}
+        services={services.map((service) => ({
+          id: service.id.toString(),
+          name: service.name,
+          categoryId: service.categoryId.toString(),
+        }))}
+      />
       <OrdersPagination page={page} totalPages={totalPages} />
     </div>
   );

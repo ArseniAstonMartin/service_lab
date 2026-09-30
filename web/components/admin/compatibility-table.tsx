@@ -1,3 +1,6 @@
+"use client";
+
+import { Pencil, Trash2 } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -7,6 +10,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { ENTRY_SOURCE_LABELS } from "@/lib/constants";
 import { COVERAGE_SENTINEL_MODEL } from "@/lib/domain/coverage";
 
@@ -15,6 +19,7 @@ export type CompatibilityEntryRow = {
   make: string;
   model: string;
   year: number;
+  categoryId: string;
   categoryName: string;
   partNumber: string;
   services: { id: string; name: string }[];
@@ -22,14 +27,21 @@ export type CompatibilityEntryRow = {
 };
 
 /**
- * The read-only compatibility-database table for /admin/compatibility
- * (TASK-038). No row click / no admin action here on purpose -- this
- * task is explicitly read-only (PRD 5.3: "a full manual CRUD UI... is
- * secondary, not MVP-blocking"); editing an entry happens indirectly,
- * either through TASK-036's confirm-compatibility flow or TASK-039/040's
- * import.
+ * The compatibility-database table for /admin/compatibility. Was
+ * read-only by design (TASK-038; PRD 5.3 called manual CRUD "secondary,
+ * not MVP-blocking"); a real Edit/Delete row action now exists, wired by
+ * the parent CompatibilityAdminPanel, which owns the dialogs these
+ * buttons open.
  */
-export function CompatibilityTable({ entries }: { entries: CompatibilityEntryRow[] }) {
+export function CompatibilityTable({
+  entries,
+  onEdit,
+  onDelete,
+}: {
+  entries: CompatibilityEntryRow[];
+  onEdit: (entry: CompatibilityEntryRow) => void;
+  onDelete: (entry: CompatibilityEntryRow) => void;
+}) {
   if (entries.length === 0) {
     return (
       <div className="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">
@@ -50,6 +62,9 @@ export function CompatibilityTable({ entries }: { entries: CompatibilityEntryRow
             <TableHead>Part Number</TableHead>
             <TableHead>Services</TableHead>
             <TableHead>Source</TableHead>
+            <TableHead>
+              <span className="sr-only">Actions</span>
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -75,6 +90,28 @@ export function CompatibilityTable({ entries }: { entries: CompatibilityEntryRow
               </TableCell>
               <TableCell>
                 <Badge variant="outline">{ENTRY_SOURCE_LABELS[entry.source]}</Badge>
+              </TableCell>
+              <TableCell>
+                <div className="flex items-center gap-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`Edit entry #${entry.id}`}
+                    onClick={() => onEdit(entry)}
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`Delete entry #${entry.id}`}
+                    onClick={() => onDelete(entry)}
+                  >
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                  </Button>
+                </div>
               </TableCell>
             </TableRow>
           ))}
