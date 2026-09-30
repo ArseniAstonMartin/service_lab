@@ -1660,3 +1660,11 @@ still depends on TASK-028.
 - Added Battery/BMS, Tesla Battery Reset and its question set. Pricing remains under admin control: the unconfigured tier displays “Quote after review”; supported requests retain their service selection but stay pending review without payment until priced. Admin compatibility rows show unknown applicability honestly.
 - Added a targeted, backed-up, atomic repair command (`npm run coverage:tesla -- --apply`) that preserves existing prices/admin confirmations/orders and other brands. Deploy checkout handling before loading unpriced services.
 - Local validation: ten parser/domain tests, seven site tests, TypeScript and the production build passed. Live repair, repeat-run verification and browser checkout checks are pending deployment of the price-review handling.
+
+## 2026-09-30 — Five site updates: privacy, theme, phone removal, mobile auto repair, checkout streamline
+- `ECU-MODELS-PRIVACY`: `/ecu-models` no longer lists the raw compatibility catalog (16,000+ rows) publicly — search/dropdowns stay, results are now a match count + CTA into the order wizard. Full rows remain admin-only at `/admin/compatibility`.
+- `SUBDOMAIN-THEME`: `--primary`/`--ring` in `globals.css` now match the marketing site's brand blue, so every default button and active state on `/order` and `/admin` matches the landing page.
+- `REMOVE-PHONE`: dropped the business phone number from the header, footer, contact page and services pages; local-service CTAs now link to `/contact` instead of `tel:`.
+- `MOBILE-AUTO-REPAIR`: `/auto-repair` reframed around mobile/on-site service (was a fixed-shop visit page), with a new 5-card grid (diagnostics, brakes, starter, alternator, electrical).
+- `CHECKOUT-STREAMLINE`: vehicle, module and part number/photo are now one combined `/order/vehicle` step instead of three separate pages; old `/order/module`/`/order/compatibility` redirect there. Fixed a hydration-timing bug the merge would have introduced (stale pre-hydration local state on first mount).
+- Verified: `tsc --noEmit`, full production build, `npm run site:test` (7/7), and the full Playwright suite (`tesla.spec.ts` + `marketing.spec.ts`, 7/7, both updated for the new behavior).
