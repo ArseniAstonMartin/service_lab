@@ -815,6 +815,57 @@
   color: var(--m-blue);
   font-weight: 700;
 }
+.m-mobile-services {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+}
+.m-mobile-service-card {
+  border: 1px solid #edf0f4;
+  border-radius: 9px;
+  background: white;
+  box-shadow: 0 2px 6px #22365b07;
+  padding: 22px 20px;
+  transition:
+    box-shadow 0.2s,
+    transform 0.2s;
+}
+.m-mobile-service-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 25px #20355412;
+}
+.m-mobile-service-card > span {
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #eaf3ff;
+  color: var(--m-blue);
+  width: 46px;
+  height: 46px;
+  margin-bottom: 14px;
+}
+.m-mobile-service-card h3 {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  margin-bottom: 6px;
+}
+.m-mobile-service-card p {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--m-muted);
+}
+@media (max-width: 860px) {
+  .m-mobile-services {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 560px) {
+  .m-mobile-services {
+    grid-template-columns: 1fr;
+  }
+}
 .m-faq {
   max-width: 880px;
 }
