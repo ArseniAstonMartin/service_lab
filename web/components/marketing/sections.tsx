@@ -2,40 +2,71 @@ import Link from "next/link";
 import {
   ArrowRight,
   BadgeCheck,
+  Battery,
   Check,
   Cpu,
+  Disc3,
   LockKeyhole,
   Package,
   Settings,
   ShieldCheck,
+  UserCog,
   UsersRound,
   Zap,
 } from "lucide-react";
 import { MARKETING_SERVICES, MAIL_STEPS } from "@/lib/marketing";
 import { ActionLink, NationwideMap, PhotoTile, ServiceIcon } from "./ui";
 
+/** One icon per reset type this card covers (airbag/occupant, battery, ECM,
+ * SAS) — matches the four-icon reference layout for this specific card. */
+const AIRBAG_RESET_ICONS = [UserCog, Battery, Cpu, Disc3];
+
 export function ServiceCards() {
   return (
     <div className="m-services-grid">
-      {MARKETING_SERVICES.map((service) => (
-        <article className="m-service-card" key={service.slug}>
-          <Link href={`/services/${service.slug}`} tabIndex={-1} aria-hidden="true">
-            <PhotoTile index={service.image} label={service.title} />
-          </Link>
-          <div className="m-service-body">
-            <span className={`m-service-icon m-icon-${service.icon}`}>
-              <ServiceIcon name={service.icon} />
-            </span>
-            <h3>
-              <Link href={`/services/${service.slug}`}>{service.title}</Link>
-            </h3>
-            <p>{service.short}</p>
-            <Link className="m-text-link" href={`/services/${service.slug}`}>
-              Learn More <ArrowRight size={14} />
+      {MARKETING_SERVICES.map((service) => {
+        // The Airbag & System Reset card gets a distinct treatment (a row
+        // of reset-type icons and its `short` copy promoted to the card's
+        // heading) instead of the single category icon + separate title/
+        // description every other card uses.
+        const isAirbagReset = service.slug === "airbag-reset";
+
+        return (
+          <article className="m-service-card" key={service.slug}>
+            <Link href={`/services/${service.slug}`} tabIndex={-1} aria-hidden="true">
+              <PhotoTile index={service.image} label={service.title} />
             </Link>
-          </div>
-        </article>
-      ))}
+            <div className="m-service-body">
+              {isAirbagReset ? (
+                <div className="m-service-icon-row" aria-hidden="true">
+                  {AIRBAG_RESET_ICONS.map((Icon, index) => (
+                    <Icon key={index} size={20} strokeWidth={1.7} />
+                  ))}
+                </div>
+              ) : (
+                <span className={`m-service-icon m-icon-${service.icon}`}>
+                  <ServiceIcon name={service.icon} />
+                </span>
+              )}
+              {isAirbagReset ? (
+                <h3 className="m-service-featured-heading">
+                  <Link href={`/services/${service.slug}`}>{service.short}</Link>
+                </h3>
+              ) : (
+                <>
+                  <h3>
+                    <Link href={`/services/${service.slug}`}>{service.title}</Link>
+                  </h3>
+                  <p>{service.short}</p>
+                </>
+              )}
+              <Link className="m-text-link" href={`/services/${service.slug}`}>
+                Learn More <ArrowRight size={14} />
+              </Link>
+            </div>
+          </article>
+        );
+      })}
     </div>
   );
 }

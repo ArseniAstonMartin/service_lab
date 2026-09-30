@@ -387,6 +387,21 @@
   margin-bottom: 10px;
   flex: 1;
 }
+.m-service-icon-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 8px;
+  color: #ff343a;
+}
+.m-service-featured-heading {
+  font-size: 14px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  line-height: 1.35;
+  color: #0d121c;
+  margin-bottom: 10px;
+  flex: 1;
+}
 .m-service-card .m-text-link {
   font-size: 11px;
   gap: 9px;

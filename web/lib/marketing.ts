@@ -50,7 +50,7 @@ export const MARKETING_SERVICES = [
   {
     slug: "airbag-reset",
     title: "Airbag & System Reset",
-    short: "Part-number checks for supported SRS crash data reset.",
+    short: "Airbag reset, battery reset, ECM reset, SAS reset, and more.",
     icon: "shield",
     image: 2,
     local: false,
