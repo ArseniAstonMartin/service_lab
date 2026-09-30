@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Clock3, MapPin, Phone } from "lucide-react";
+import { Clock3, MapPin } from "lucide-react";
 import { BUSINESS } from "@/lib/marketing";
 import { PageIntro } from "@/components/marketing/ui";
 import { ContactForm } from "@/components/marketing/contact-form";
@@ -13,18 +13,10 @@ export default function ContactPage() {
       <PageIntro
         eyebrow="About & contact"
         title="Let’s get you moving."
-        description="Tell us what your vehicle needs. Call to arrange a local appointment or use the form for service and module inquiries."
+        description="Tell us what your vehicle needs. Use the form below for service and module inquiries, or find our location and hours."
       />
       <section className="m-container m-page-section m-contact-grid">
         <div className="m-contact-details">
-          <div>
-            <Phone />
-            <div>
-              <h2>Give us a call</h2>
-              <a href={BUSINESS.phoneHref}>{BUSINESS.phone}</a>
-              <p>For appointments and service questions.</p>
-            </div>
-          </div>
           <div>
             <MapPin />
             <div>

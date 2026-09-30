@@ -33,10 +33,9 @@ test("mobile navigation, appointment details and contact validation", async ({ p
     .click();
   await expect(page.getByRole("heading", { name: "By appointment" })).toBeVisible();
   await expect(page.getByText("Call to arrange a visit.", { exact: false }).first()).toBeVisible();
-  await expect(page.getByRole("link", { name: /808.*743.*4377/ }).first()).toHaveAttribute(
-    "href",
-    "tel:+18087434377",
-  );
+  // No phone number is shown anywhere on the site (business decision) —
+  // the old "Give us a call" contact card and its tel: link are gone.
+  await expect(page.getByRole("link", { name: /808.*743.*4377/ })).toHaveCount(0);
   await page.getByRole("button", { name: "Send Message" }).click();
   expect(
     await page

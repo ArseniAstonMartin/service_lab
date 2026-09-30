@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { ArrowRight, ChevronDown, Menu, Phone, Search, X } from "lucide-react";
-import { BUSINESS, MARKETING_SERVICES } from "@/lib/marketing";
+import { ArrowRight, ChevronDown, Menu, Search, X } from "lucide-react";
+import { MARKETING_SERVICES } from "@/lib/marketing";
 
 export function MarketingHeader({ orderUrl }: { orderUrl: string }) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -74,10 +74,6 @@ export function MarketingHeader({ orderUrl }: { orderUrl: string }) {
           <Link href="/auto-repair">Auto Repair</Link>
           <Link href="/about">About</Link>
           <Link href="/contact">Contact</Link>
-          <a href={BUSINESS.phoneHref} className="m-mobile-phone">
-            <Phone size={15} />
-            {BUSINESS.phone}
-          </a>
         </nav>
         <form className="m-header-search" action="/ecu-models" role="search">
           <Search size={16} aria-hidden="true" />
