@@ -1678,3 +1678,8 @@ still depends on TASK-028.
 - `HERO-HAWAII`: the user supplied the composited hero image directly (same car/garage, Hawaiian coastal-mountain background); swapped `hero.webp` in place, no code changes needed (`next/image fill` + matching aspect ratio).
 - `AUTO-REPAIR-MERGE`: folded the standalone `/auto-repair` page's mobile-repair content and 5-card grid into `/services/auto-repair` (the shared per-service template), keeping that page's existing banner photo unchanged. Deleted the standalone page and fixed the header nav link + sitemap. Other "visit us" local services (diagnostics, hybrid-battery, keys-immobilizers) are unaffected.
 - Verified: `tsc --noEmit`, full production build (32 routes), `npm run site:test` (7/7), and screenshots of both the new hero and the merged auto-repair page.
+
+## 2026-10-16 — Custom reset icons + hybrid battery rename
+- `AIRBAG-CARD-ICONS`: replaced the Airbag & System Reset card's four Lucide stand-in icons with custom pictograms (`components/marketing/reset-icons.tsx`) matching a supplied reference image. Verified with a zoomed screenshot; revised the airbag icon once for clarity.
+- `HYBRID-BATTERY-TITLE`: "Prius Battery Repair" → "Hybrid Vehicle Battery Repair".
+- Two other requested changes (re-displaying a phone number somewhere, after it was explicitly removed sitewide last session; a new "Vehicle diagnostics" option on the order form that skips part number/service) are ambiguous enough to need the user's input before implementing — asked rather than guessed.
