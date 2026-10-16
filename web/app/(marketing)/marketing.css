@@ -389,9 +389,13 @@
 }
 .m-service-icon-row {
   display: flex;
+  align-items: center;
   gap: 10px;
   margin-bottom: 8px;
-  color: #ff343a;
+}
+.m-service-icon-row img {
+  height: 24px;
+  width: auto;
 }
 .m-service-featured-heading {
   font-size: 14px;

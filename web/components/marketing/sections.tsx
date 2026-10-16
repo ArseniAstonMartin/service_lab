@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import {
   ArrowRight,
@@ -13,12 +14,21 @@ import {
 } from "lucide-react";
 import { MARKETING_SERVICES, MAIL_STEPS } from "@/lib/marketing";
 import { ActionLink, NationwideMap, PhotoTile, ServiceIcon } from "./ui";
-import { AirbagResetIcon, BatteryResetIcon, EcmResetIcon, SasResetIcon } from "./reset-icons";
 
-/** One icon per reset type this card covers (airbag, battery, ECM, SAS) —
- * custom pictograms matching a supplied reference image, not the closest
- * generic Lucide icons. */
-const AIRBAG_RESET_ICONS = [AirbagResetIcon, BatteryResetIcon, EcmResetIcon, SasResetIcon];
+/**
+ * One icon per reset type this card covers (airbag, battery, ECM, SAS) —
+ * cropped directly from a supplied reference image (not a hand-drawn
+ * approximation of it) so they're pixel-for-pixel the requested icons,
+ * not just close. Natural (cropped) pixel dimensions, scaled to a fixed
+ * 24px height by CSS (.m-service-icon-row img) — they aren't a uniform
+ * aspect ratio in the source.
+ */
+const AIRBAG_RESET_ICONS = [
+  { src: "/images/marketing/reset-airbag.webp", width: 264, height: 223, alt: "Airbag reset" },
+  { src: "/images/marketing/reset-battery.webp", width: 236, height: 178, alt: "Battery reset" },
+  { src: "/images/marketing/reset-ecm.webp", width: 237, height: 232, alt: "ECM reset" },
+  { src: "/images/marketing/reset-sas.webp", width: 274, height: 205, alt: "SAS reset" },
+];
 
 export function ServiceCards() {
   return (
@@ -38,8 +48,8 @@ export function ServiceCards() {
             <div className="m-service-body">
               {isAirbagReset ? (
                 <div className="m-service-icon-row" aria-hidden="true">
-                  {AIRBAG_RESET_ICONS.map((Icon, index) => (
-                    <Icon key={index} size={20} />
+                  {AIRBAG_RESET_ICONS.map((icon) => (
+                    <Image key={icon.src} src={icon.src} width={icon.width} height={icon.height} alt="" />
                   ))}
                 </div>
               ) : (
