@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Check } from "lucide-react";
-import { MARKETING_SERVICES, MOBILE_SERVICES } from "@/lib/marketing";
+import { BUSINESS, MARKETING_SERVICES, MOBILE_SERVICES } from "@/lib/marketing";
 import { requestSiteUrls } from "@/lib/site-urls";
 import { ActionLink, PageIntro, PhotoTile, ServiceIcon } from "@/components/marketing/ui";
 export function generateStaticParams() {
@@ -52,14 +52,20 @@ export default async function ServicePage({ params }: { params: Promise<{ slug: 
             {service.prepare}
           </div>
           <ActionLink
-            href={service.local ? "/contact" : `${urls.order}/order/vehicle`}
-            icon={service.local ? "calendar" : "package"}
+            href={
+              isAutoRepair
+                ? "/contact"
+                : service.local
+                  ? BUSINESS.phoneHref
+                  : `${urls.order}/order/vehicle`
+            }
+            icon={isAutoRepair ? "calendar" : service.local ? "none" : "package"}
           >
-            {service.local
-              ? isAutoRepair
-                ? "Request Mobile Service"
-                : "Contact Us to Arrange a Visit"
-              : "Check Your Module"}
+            {isAutoRepair
+              ? "Request Mobile Service"
+              : service.local
+                ? "Call to Arrange a Visit"
+                : "Check Your Module"}
           </ActionLink>
         </div>
         <div className="m-detail-photo">
@@ -79,7 +85,11 @@ export default async function ServicePage({ params }: { params: Promise<{ slug: 
                   ? "Visit by appointment at 91-1018 Lipo St, Kapolei, Hawaii."
                   : "Start with the catalog part number on the label. If we cannot confirm a match, your request goes to manual review."}
             </p>
-            <Link href="/contact">Contact us ↗</Link>
+            {!isAutoRepair && service.local ? (
+              <a href={BUSINESS.phoneHref}>{BUSINESS.phone}</a>
+            ) : (
+              <Link href="/contact">Contact us ↗</Link>
+            )}
           </div>
         </div>
       </section>

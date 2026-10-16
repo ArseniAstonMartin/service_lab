@@ -1,6 +1,6 @@
 export const BUSINESS = {
   name: "Best Auto Repair",
-  phone: "+1 (808) 743-4377",
+  phone: "8087434377",
   phoneHref: "tel:+18087434377",
   address: "91-1018 Lipo St",
   locality: "Kapolei, Hawaii",

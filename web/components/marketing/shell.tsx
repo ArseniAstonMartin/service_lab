@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { MapPin, ArrowUpRight } from "lucide-react";
+import { MapPin, Phone, ArrowUpRight } from "lucide-react";
 import type { ReactNode } from "react";
 import { requestSiteUrls } from "@/lib/site-urls";
 import { BUSINESS } from "@/lib/marketing";
@@ -26,7 +26,11 @@ export async function MarketingShell({ children }: { children: ReactNode }) {
               <MapPin size={15} /> {BUSINESS.address}, {BUSINESS.locality}
               <ArrowUpRight size={13} />
             </a>
-            <span>By appointment · Contact us to arrange a visit</span>
+            <a href={BUSINESS.phoneHref}>
+              <Phone size={15} />
+              {BUSINESS.phone}
+            </a>
+            <span>By appointment · Call to arrange a visit</span>
           </div>
           <div className="m-footer-links">
             <Link href="/mail-in-service">Mail-in service</Link>
