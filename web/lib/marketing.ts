@@ -104,7 +104,7 @@ export const MARKETING_SERVICES = [
   },
   {
     slug: "hybrid-battery",
-    title: "Prius Battery Repair",
+    title: "Hybrid Vehicle Battery Repair",
     short: "Discuss diagnosis and repair options for your hybrid battery.",
     icon: "leaf",
     image: 5,
