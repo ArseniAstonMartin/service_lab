@@ -1702,3 +1702,7 @@ still depends on TASK-028.
 - `SHIPPING-NO-MODULE`: removed "Shipping your module to us on Oahu is free" from the Price card (every category) and the return address section (street/city/state/zip, sentinel-stored server-side) for Vehicle Diagnostics, which never ships anything back. Reworded the shipping page's static subtitle too (same module-shipping assumption).
 - Caught and fixed a real bug while verifying this: `ShippingForm`'s submit handler unconditionally required `stickerPhotoUrl`, which is correctly `null` for Vehicle Diagnostics — every diagnostics order would have failed to submit. My earlier end-to-end test for that category never caught it because it deliberately stopped before clicking Place order, matching the existing "never submits a real order" test convention.
 - Verified: `tsc --noEmit`, full production build, `npm run site:test` (7/7), full Playwright suite (16/16, extended both `tesla.spec.ts` and `vehicle-diagnostics.spec.ts`), and screenshots of both flows' shipping step.
+
+## 2026-10-16 — Airbag card icons: exact crop, not a redraw
+- `AIRBAG-CARD-ICONS-EXACT`: user asked for the exact reference icons, not an approximation. Replaced the hand-drawn SVG pictograms with WebP images cropped directly out of the supplied reference (Pillow, red-pixel bounding-box detection per icon). Deleted `reset-icons.tsx`.
+- Verified: `tsc --noEmit`, full production build, `npm run site:test` (7/7), `marketing.spec.ts` (5/5), and a scaled screenshot confirming a pixel-level match.
