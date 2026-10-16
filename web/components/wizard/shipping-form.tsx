@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -25,25 +25,45 @@ import { writeOrderResult } from "@/lib/wizard/order-result";
 import { formatCents } from "@/lib/format";
 import type { WizardContact } from "@/lib/wizard/types";
 
-const contactSchema = z.object({
-  name: z.string().trim().min(1, "Required"),
-  email: z.string().trim().email("Enter a valid email address"),
-  phone: z
-    .string()
-    .trim()
-    .min(7, "Enter a valid phone number")
-    .regex(/^[0-9+()\-.\s]+$/, "Enter a valid phone number"),
-  street: z.string().trim().min(1, "Required"),
-  city: z.string().trim().min(1, "Required"),
-  state: z
-    .string()
-    .trim()
-    .toUpperCase()
-    .regex(/^[A-Z]{2}$/, "Use a 2-letter state code"),
-  zip: z.string().trim().regex(/^\d{5}(-\d{4})?$/, "Enter a valid US ZIP code"),
-});
+/**
+ * The return-address fields are only meaningful when a module is
+ * actually being shipped back — not for a no-part-number category
+ * (Vehicle Diagnostics), which never ships anything. `requiresReturnAddress`
+ * keeps them in the schema's shape either way (so ContactFormValues stays
+ * one stable type) but only enforces them when true; the fields
+ * themselves are hidden from the form in that case too (see below), and
+ * placeOrder independently stores a sentinel for them regardless of
+ * whatever this sends — never trusted either way.
+ */
+function buildContactSchema(requiresReturnAddress: boolean) {
+  return z.object({
+    name: z.string().trim().min(1, "Required"),
+    email: z.string().trim().email("Enter a valid email address"),
+    phone: z
+      .string()
+      .trim()
+      .min(7, "Enter a valid phone number")
+      .regex(/^[0-9+()\-.\s]+$/, "Enter a valid phone number"),
+    street: requiresReturnAddress ? z.string().trim().min(1, "Required") : z.string(),
+    city: requiresReturnAddress ? z.string().trim().min(1, "Required") : z.string(),
+    state: requiresReturnAddress
+      ? z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/, "Use a 2-letter state code")
+      : z.string(),
+    zip: requiresReturnAddress
+      ? z.string().trim().regex(/^\d{5}(-\d{4})?$/, "Enter a valid US ZIP code")
+      : z.string(),
+  });
+}
 
-type ContactFormValues = z.infer<typeof contactSchema>;
+type ContactFormValues = {
+  name: string;
+  email: string;
+  phone: string;
+  street: string;
+  city: string;
+  state: string;
+  zip: string;
+};
 
 /** One review row: a label, its current value, and an Edit link back to
  * the wizard step that collected it. */
@@ -78,6 +98,12 @@ function ReviewRow({
  * of the whole order collected so far with Edit links back to each
  * step, and the price breakdown (matched path) or a manual-review
  * notice (pending-review path).
+ *
+ * The return address (and its validation) is skipped entirely for a
+ * no-part-number category (Vehicle Diagnostics) — nothing is being
+ * shipped back, so there's nothing to collect. stickerPhotoUrl is also
+ * genuinely null for that category (VehicleModulePartForm never
+ * collects one), not a missing-field error to block the submit over.
  */
 export function ShippingForm() {
   const router = useRouter();
@@ -89,6 +115,13 @@ export function ShippingForm() {
   const ready = useStepGuard("shipping");
 
   const isMatchedPath = Boolean(state.serviceId);
+  // Same signal DetailsForm uses: VehicleModulePartForm only ever leaves
+  // state.partNumber empty for a no-part-number category (Vehicle
+  // Diagnostics). That category also never ships a module back (no
+  // return address to collect) and never collects a sticker photo —
+  // both derive from the same signal below.
+  const isNoPartNumberOrder = !state.partNumber.trim();
+  const requiresReturnAddress = !isNoPartNumberOrder;
 
   const [categoryName, setCategoryName] = useState<string | null>(null);
   const [serviceQuote, setServiceQuote] = useState<ServiceQuote | null>(null);
@@ -148,6 +181,11 @@ export function ShippingForm() {
     zip: state.contact?.zip ?? "",
   };
 
+  // Rebuilt only if requiresReturnAddress itself changes (it can't,
+  // really, within one visit to this step), so this doesn't fight
+  // react-hook-form by constructing a new resolver on every render.
+  const contactSchema = useMemo(() => buildContactSchema(requiresReturnAddress), [requiresReturnAddress]);
+
   const form = useForm<ContactFormValues>({
     resolver: zodResolver(contactSchema),
     defaultValues: defaultContact,
@@ -164,7 +202,16 @@ export function ShippingForm() {
     setIsSubmitting(true);
 
     try {
-      if (!state.vehicle || !state.categoryId || !state.stickerPhotoUrl) {
+      if (!state.vehicle || !state.categoryId) {
+        throw new Error(
+          "Your order is missing some required information — please go back and check each step.",
+        );
+      }
+      // stickerPhotoUrl is only ever required for a part-number category
+      // — null is correct and expected for one like Vehicle Diagnostics
+      // (VehicleModulePartForm never collects one for it), not a missing
+      // field to reject the submit over.
+      if (!isNoPartNumberOrder && !state.stickerPhotoUrl) {
         throw new Error(
           "Your order is missing some required information — please go back and check each step.",
         );
@@ -174,7 +221,7 @@ export function ShippingForm() {
         vehicle: state.vehicle,
         categoryId: state.categoryId,
         partNumber: state.partNumber,
-        stickerPhotoUrl: state.stickerPhotoUrl,
+        stickerPhotoUrl: state.stickerPhotoUrl ?? "",
         serviceId: state.serviceId,
         description: state.description,
         answers: state.answers,
@@ -280,14 +327,16 @@ export function ShippingForm() {
           </p>
         )}
         <p className="text-xs text-muted-foreground">
-          Shipping your module to us on Oahu is free. No payment is taken now — once your service
-          is confirmed, you&apos;ll get a secure payment link by email.
+          No payment is taken now — once your service is confirmed, you&apos;ll get a secure
+          payment link by email.
         </p>
       </Card>
 
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-          <h2 className="text-sm font-semibold">Contact &amp; return address</h2>
+          <h2 className="text-sm font-semibold">
+            {requiresReturnAddress ? "Contact & return address" : "Contact"}
+          </h2>
 
           <FormField
             control={form.control}
@@ -331,63 +380,67 @@ export function ShippingForm() {
             )}
           />
 
-          <FormField
-            control={form.control}
-            name="street"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Return address — street</FormLabel>
-                <FormControl>
-                  <Input {...field} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+          {requiresReturnAddress ? (
+            <>
+              <FormField
+                control={form.control}
+                name="street"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Return address — street</FormLabel>
+                    <FormControl>
+                      <Input {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
-          <div className="grid grid-cols-2 gap-3">
-            <FormField
-              control={form.control}
-              name="city"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>City</FormLabel>
-                  <FormControl>
-                    <Input {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+              <div className="grid grid-cols-2 gap-3">
+                <FormField
+                  control={form.control}
+                  name="city"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>City</FormLabel>
+                      <FormControl>
+                        <Input {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
-            <FormField
-              control={form.control}
-              name="state"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>State</FormLabel>
-                  <FormControl>
-                    <Input maxLength={2} className="uppercase" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
+                <FormField
+                  control={form.control}
+                  name="state"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>State</FormLabel>
+                      <FormControl>
+                        <Input maxLength={2} className="uppercase" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
 
-          <FormField
-            control={form.control}
-            name="zip"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>ZIP code</FormLabel>
-                <FormControl>
-                  <Input {...field} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+              <FormField
+                control={form.control}
+                name="zip"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>ZIP code</FormLabel>
+                    <FormControl>
+                      <Input {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </>
+          ) : null}
 
           {submitError ? <p className="text-sm text-destructive">{submitError}</p> : null}
 

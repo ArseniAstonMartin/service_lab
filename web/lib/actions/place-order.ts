@@ -6,7 +6,7 @@ import type { OrderStatus, PhotoType } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { normalizePartNumber } from "@/lib/domain/part-number";
 import { decideMatch, type MatchResult } from "@/lib/domain/compatibility";
-import { NO_PART_NUMBER_SENTINEL } from "@/lib/domain/coverage";
+import { NO_PART_NUMBER_SENTINEL, NO_RETURN_ADDRESS_SENTINEL } from "@/lib/domain/coverage";
 import { lookupCompatibility, servicesFromEntry } from "@/lib/services/compatibility-lookup";
 import { quote } from "@/lib/domain/quote";
 import { generateTrackingToken } from "@/lib/domain/token";
@@ -55,10 +55,17 @@ const placeOrderSchema = z.object({
     name: z.string().trim().min(1),
     email: z.string().trim().email(),
     phone: z.string().trim().min(1),
-    street: z.string().trim().min(1),
-    city: z.string().trim().min(1),
-    state: z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/),
-    zip: z.string().trim().regex(/^\d{5}(-\d{4})?$/),
+    // All four required for an ordinary part-number category (a module
+    // is being shipped back); ignored (and, on the wizard side, never
+    // shown) for one like Vehicle Diagnostics with requiresPartNumber
+    // false -- nothing is being shipped back, so there's no return
+    // address to collect. Same shape-can't-express-a-conditional-
+    // requirement reasoning as partNumber/stickerPhotoUrl above:
+    // enforced in code, once the category's been looked up, not here.
+    street: z.string(),
+    city: z.string(),
+    state: z.string(),
+    zip: z.string(),
   }),
   // Generated once per wizard session on the client (TASK-021). A repeat
   // submit with the same key (double-click, back button, retry after a
@@ -149,6 +156,31 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
   ]);
   if (!category) {
     throw new Error("Invalid categoryId");
+  }
+
+  // Same conditional-on-the-category story as partNumber/stickerPhotoUrl:
+  // a real return address, format-checked, for an ordinary category (a
+  // module is being shipped back); the sentinel otherwise, regardless of
+  // whatever the client sent for these fields -- nothing is being
+  // shipped back for Vehicle Diagnostics, so there's nothing to trust or
+  // validate here.
+  let returnAddress: { street: string; city: string; state: string; zip: string };
+  if (category.requiresPartNumber) {
+    const { street, city, state, zip } = parsed.contact;
+    if (!street.trim() || !city.trim()) {
+      throw new Error("A full return address is required for this category.");
+    }
+    const normalizedState = state.trim().toUpperCase();
+    if (!/^[A-Z]{2}$/.test(normalizedState)) {
+      throw new Error("Return address state must be a 2-letter code.");
+    }
+    const trimmedZip = zip.trim();
+    if (!/^\d{5}(-\d{4})?$/.test(trimmedZip)) {
+      throw new Error("Return address ZIP must be a valid US ZIP code.");
+    }
+    returnAddress = { street: street.trim(), city: city.trim(), state: normalizedState, zip: trimmedZip };
+  } else {
+    returnAddress = { ...NO_RETURN_ADDRESS_SENTINEL };
   }
 
   let vehicleId: bigint;
@@ -300,10 +332,10 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
         customerName: parsed.contact.name,
         customerEmail: parsed.contact.email,
         customerPhone: parsed.contact.phone,
-        returnAddressStreet: parsed.contact.street,
-        returnAddressCity: parsed.contact.city,
-        returnAddressState: parsed.contact.state,
-        returnAddressZip: parsed.contact.zip,
+        returnAddressStreet: returnAddress.street,
+        returnAddressCity: returnAddress.city,
+        returnAddressState: returnAddress.state,
+        returnAddressZip: returnAddress.zip,
         servicePriceCents,
         returnShippingFeeCents,
         totalAmountCents,

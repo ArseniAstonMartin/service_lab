@@ -51,6 +51,21 @@ test("Vehicle Diagnostics skips part number/photo and /order/service, landing on
   await expect(page).toHaveURL(/\/order\/shipping$/);
   await expect(page.getByText(/Quote after review\. Your selected service is supported/)).toBeVisible();
   await expect(page.getByText("$0.00", { exact: true })).toHaveCount(0);
+
+  // No module ever gets shipped back for this category: no return
+  // address section at all (heading says just "Contact"), and the
+  // free-shipping line (which only ever made sense for a mailed-in
+  // module anyway) is gone from this step entirely, for every category.
+  await expect(page.getByRole("heading", { name: "Contact", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Contact & return address" })).toHaveCount(0);
+  await expect(page.getByLabel("Return address — street", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("ZIP code", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Shipping your module", { exact: false })).toHaveCount(0);
+  // The pre-existing stickerPhotoUrl-required guard blocked every
+  // Vehicle Diagnostics submission outright (state.stickerPhotoUrl is
+  // correctly null for this category, not a missing field) -- confirms
+  // Place order is actually reachable, without clicking it for real.
+  await expect(page.getByRole("button", { name: "Place order", exact: true })).toBeEnabled();
 });
 
 test("a regular (part-number) category still shows the optional preview button, separate from Continue", async ({

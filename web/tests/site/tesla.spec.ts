@@ -57,6 +57,11 @@ test("Tesla battery coverage reaches service, questions and current admin pricin
     await expect(page.getByText("Total", { exact: true })).toBeVisible();
   }
   await expect(page.getByText("$0.00", { exact: true })).toHaveCount(0);
+  // A real part-number category ships a module back -- the return
+  // address section is still here, unlike Vehicle Diagnostics.
+  await expect(page.getByRole("heading", { name: "Contact & return address" })).toBeVisible();
+  await expect(page.getByLabel("Return address — street", { exact: true })).toBeVisible();
+  await expect(page.getByText("Shipping your module", { exact: false })).toHaveCount(0);
 });
 
 test("Tesla SRS uses canonical OEM numbers and rejects battery numbers", async ({ page }) => {

@@ -18,3 +18,16 @@ export const VEHICLE_DIAGNOSTICS_SERVICE = "Vehicle Diagnostics";
 // stored there, since there is no real schema change to make it
 // optional just for this one case.
 export const NO_PART_NUMBER_SENTINEL = "N/A";
+
+// Order.returnAddress{Street,City,State,Zip} are all NOT NULL too --
+// same reasoning. A category with no part number doesn't ship a module
+// back, so there's no return address to collect; placeOrder stores
+// these instead of whatever (if anything) the client sent, same as it
+// does for partNumberEntered. returnAddressState is VarChar(2), hence
+// "NA" rather than "N/A" there specifically.
+export const NO_RETURN_ADDRESS_SENTINEL = {
+  street: "N/A",
+  city: "N/A",
+  state: "NA",
+  zip: "00000",
+} as const;
