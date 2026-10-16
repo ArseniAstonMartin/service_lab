@@ -110,5 +110,8 @@ test("order subdomain loads the combined vehicle/module/part step", async ({ pag
   // Vehicle, module, and part number/photo are one page now — the old
   // /order/module and /order/compatibility steps just redirect back here.
   await expect(page.getByRole("heading", { name: "Module", exact: true })).toBeVisible();
+  // Part number/photo is hidden until a category that needs one is picked.
+  await expect(page.getByRole("heading", { name: "Part number & photo" })).toHaveCount(0);
+  await page.getByRole("button", { name: "ECM/PCM", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Part number & photo" })).toBeVisible();
 });

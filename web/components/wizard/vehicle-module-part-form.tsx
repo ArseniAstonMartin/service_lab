@@ -87,19 +87,26 @@ function StickerReference() {
 
 /**
  * /order/vehicle: the combined first step — vehicle, module category,
- * and part number/photo all on one page, ending in the same
- * checkCompatibility call the three separate steps used to make.
- * Replaces the old /order/vehicle -> /order/module -> /order/compatibility
- * chain (each a separate "Next" click) with a single "Check compatibility"
- * action once every field is filled in. Everything downstream —
- * checkCompatibility itself, the match result shape, and where a
- * matched vs. pending-review order goes next — is unchanged.
+ * and (for most categories) part number/photo all on one page.
+ *
+ * "Continue" is the one required action: it runs checkCompatibility
+ * itself if it hasn't already (no separate confirm click needed — the
+ * old flow made the customer click "Check compatibility", read the
+ * result, then click "Continue" a second time to do the exact same
+ * thing placeOrder re-derives server-side regardless) and routes
+ * straight to the right next step. "Check compatibility" still exists,
+ * but only as an optional preview button for a category that needs a
+ * part number — useful if someone wants to see the result before
+ * deciding what to type in Details, not required to proceed.
  *
  * A category with requiresPartNumber false (Vehicle Diagnostics) skips
- * the part number + photo section entirely — there's no module/part
- * number involved, so checkCompatibility (and placeOrder) resolve that
- * category straight to its own one Service instead of looking up a
- * CompatibilityEntry.
+ * the part number + photo section entirely (hidden by default, in fact
+ * — it only appears once a category that needs one is picked) and has
+ * no preview button at all: checkCompatibility (and placeOrder) always
+ * resolve it to its own one Service for any vehicle, so there's nothing
+ * to preview. It also has only one Service, so there's nothing to pick
+ * on /order/service either — Continue sets serviceId itself and routes
+ * straight to /order/details.
  */
 export function VehicleModulePartForm({
   makes,
@@ -164,14 +171,20 @@ export function VehicleModulePartForm({
     // Selecting a parent resets its children — a model/year picked for
     // the previous make is meaningless once the make changes.
     update({ vehicle: { make: nextMake, model: "", year: 0 } });
+    // handleContinue below can reuse an already-computed `result`
+    // without re-checking — stale once the vehicle it was computed for
+    // has changed, so drop it like the part number/photo handlers do.
+    setResult(null);
   }
 
   function handleModelChange(nextModel: string) {
     update({ vehicle: { make, model: nextModel, year: 0 } });
+    setResult(null);
   }
 
   function handleYearChange(nextYear: string) {
     update({ vehicle: { make, model, year: Number(nextYear) } });
+    setResult(null);
   }
 
   const vehicleComplete = Boolean(
@@ -181,9 +194,10 @@ export function VehicleModulePartForm({
   // --- Module category ---
   const categoryId = state.categoryId;
   const selectedCategory = categories.find((category) => category.id === categoryId);
-  // Defaults to true (show the part number section) before any category
-  // is picked yet — matches every category except Vehicle Diagnostics.
-  const requiresPartNumber = selectedCategory?.requiresPartNumber ?? true;
+  // Defaults to false (part number section hidden) before any category
+  // is picked yet — it only appears once a category that actually needs
+  // one is selected, not as a default assumption.
+  const requiresPartNumber = selectedCategory?.requiresPartNumber ?? false;
 
   function handleCategorySelect(id: string) {
     update({ categoryId: id });
@@ -227,16 +241,21 @@ export function VehicleModulePartForm({
     setResult(null);
   }
 
-  const canCheck =
+  const canContinue =
     Boolean(
       vehicleComplete &&
         categoryId &&
         (requiresPartNumber ? partNumber.trim() && stickerPhotoUrl : true),
     ) && !isChecking;
 
-  async function handleCheck() {
-    if (!state.vehicle || !categoryId || !vehicleComplete) return;
-    if (requiresPartNumber && !stickerPhotoUrl) return;
+  /**
+   * Runs checkCompatibility and stores the result — shared by both
+   * buttons below. Doesn't navigate; callers decide what to do with the
+   * result (handleContinue routes on it immediately, the optional
+   * preview button on requiresPartNumber categories just displays it).
+   */
+  async function runCheck(): Promise<WizardMatchResult | null> {
+    if (!state.vehicle || !categoryId) return null;
 
     setIsChecking(true);
     setCheckError(null);
@@ -247,25 +266,58 @@ export function VehicleModulePartForm({
         categoryId,
         ...(requiresPartNumber ? { partNumber, stickerPhotoUrl: stickerPhotoUrl! } : {}),
       });
-
       setResult(matchResult);
-      update({
-        partNumber: requiresPartNumber ? partNumber : "",
-        stickerPhotoUrl: requiresPartNumber ? stickerPhotoUrl : null,
-        matchResult,
-      });
+      return matchResult;
     } catch (err) {
       setCheckError(
         err instanceof Error ? err.message : "Could not check compatibility. Please try again.",
       );
+      return null;
     } finally {
       setIsChecking(false);
     }
   }
 
-  function handleContinue() {
-    if (!result) return;
-    router.push(result.matched ? "/order/service" : "/order/details");
+  /** The optional preview button, shown only for a category that needs
+   * a part number — runs the same check as Continue would, just without
+   * navigating anywhere. */
+  function handlePreviewCheck() {
+    void runCheck();
+  }
+
+  /**
+   * The one required action. Reuses an already-computed result (the
+   * optional preview button, or a prior attempt) when one exists;
+   * otherwise runs the check itself — either way this is the only click
+   * needed to move on, matching vs. not matched routes to the right
+   * place exactly like before, just without a separate confirm step.
+   *
+   * For a category with no part number (Vehicle Diagnostics), there's
+   * only ever one Service, so there's nothing to pick on /order/service
+   * — serviceId is set here directly and /order/service is skipped
+   * entirely, straight to /order/details.
+   */
+  async function handleContinue() {
+    if (!canContinue) return;
+
+    const matchResult = result ?? (await runCheck());
+    if (!matchResult) return;
+
+    update({
+      partNumber: requiresPartNumber ? partNumber : "",
+      stickerPhotoUrl: requiresPartNumber ? stickerPhotoUrl : null,
+      matchResult,
+      serviceId:
+        !requiresPartNumber && matchResult.matched && matchResult.services.length === 1
+          ? matchResult.services[0].id
+          : state.serviceId,
+    });
+
+    if (!requiresPartNumber) {
+      router.push("/order/details");
+      return;
+    }
+    router.push(matchResult.matched ? "/order/service" : "/order/details");
   }
 
   if (!ready) {
@@ -391,55 +443,62 @@ export function VehicleModulePartForm({
             </div>
           </div>
         </div>
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          No part number needed — tell us the symptoms on the next step and we&apos;ll take it
-          from there.
-        </p>
-      )}
+      ) : null}
 
       {checkError ? <p className="text-sm text-destructive">{checkError}</p> : null}
 
-      {result ? (
+      {/* Only for a category that needs a part number — the optional
+          preview result. Vehicle Diagnostics never shows this: it's
+          always matched, so there's nothing worth previewing, and
+          Continue below goes straight to /order/details either way. */}
+      {requiresPartNumber && result ? (
         result.matched ? (
           <div className="flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 p-3 text-sm">
             <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
             <span>
-              {requiresPartNumber
-                ? `Found it — ${result.services.length} service${result.services.length === 1 ? "" : "s"} confirmed for this part.`
-                : "Vehicle Diagnostics is available for your vehicle."}
+              Found it — {result.services.length} service{result.services.length === 1 ? "" : "s"}{" "}
+              confirmed for this part.
             </span>
           </div>
         ) : (
           <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
             <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
             <span>
-              {requiresPartNumber
-                ? "We don't have this part number confirmed yet. Your order will be submitted for manual review — our team will check the photo and part number and follow up."
-                : "Vehicle Diagnostics isn't available right now — please contact us directly."}
+              We don&apos;t have this part number confirmed yet. Your order will be submitted for
+              manual review — our team will check the photo and part number and follow up.
             </span>
           </div>
         )
       ) : null}
 
-      {result ? (
-        <Button type="button" className="w-full" onClick={handleContinue}>
-          Continue
-        </Button>
-      ) : (
-        <Button type="button" className="w-full" disabled={!canCheck || isPending} onClick={handleCheck}>
+      <div className="space-y-2">
+        <Button
+          type="button"
+          className="w-full"
+          disabled={!canContinue || isPending}
+          onClick={handleContinue}
+        >
           {isChecking ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              {requiresPartNumber ? "Checking..." : "Loading..."}
+              Please wait...
             </>
-          ) : requiresPartNumber ? (
-            "Check compatibility"
           ) : (
             "Continue"
           )}
         </Button>
-      )}
+        {requiresPartNumber ? (
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full"
+            disabled={!canContinue || isPending}
+            onClick={handlePreviewCheck}
+          >
+            Check compatibility (optional)
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 }
