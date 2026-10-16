@@ -2,6 +2,7 @@
 
 import "server-only";
 import { z } from "zod";
+import { prisma } from "@/lib/db";
 import { decideMatch, type MatchResult } from "@/lib/domain/compatibility";
 import { isVercelBlobUrl } from "@/lib/blob";
 import { lookupCompatibility, servicesFromEntry } from "@/lib/services/compatibility-lookup";
@@ -13,12 +14,15 @@ const checkCompatibilitySchema = z.object({
     year: z.number().int(),
   }),
   categoryId: z.string().min(1),
-  partNumber: z.string().min(1),
-  // Required (PRD 4.2: "Photo upload (required) of the module's
-  // label"), but validated here rather than trusted: the client could
-  // still submit a non-Blob string, so isVercelBlobUrl() below is what
-  // actually decides whether it's accepted.
-  stickerPhotoUrl: z.string().min(1),
+  // Required (PRD 4.2: "Photo upload (required) of the module's label")
+  // for an ordinary part-number category, but NOT sent at all for a
+  // category like Vehicle Diagnostics (ModuleCategory.requiresPartNumber
+  // false) -- the wizard never shows those fields for one. Enforced
+  // below, after the category's own requiresPartNumber is looked up,
+  // not in this shape (a fixed zod shape can't make a field conditionally
+  // required on a value that isn't known until a query runs).
+  partNumber: z.string().optional(),
+  stickerPhotoUrl: z.string().optional(),
 });
 
 export type CheckCompatibilityInput = z.infer<typeof checkCompatibilitySchema>;
@@ -71,10 +75,6 @@ export async function checkCompatibility(
 ): Promise<CompatibilityMatchResult> {
   const parsed = checkCompatibilitySchema.parse(input);
 
-  if (!isVercelBlobUrl(parsed.stickerPhotoUrl)) {
-    throw new Error("stickerPhotoUrl must be a Vercel Blob URL");
-  }
-
   let categoryId: bigint;
   try {
     categoryId = BigInt(parsed.categoryId);
@@ -82,13 +82,65 @@ export async function checkCompatibility(
     throw new Error("Invalid categoryId");
   }
 
-  const { vehicle, entry } = await lookupCompatibility({
-    make: parsed.vehicle.make,
-    model: parsed.vehicle.model,
-    year: parsed.vehicle.year,
-    categoryId,
-    partNumber: parsed.partNumber,
-  });
+  // Category and the ordinary vehicle/part-number lookup run in
+  // parallel rather than sequentially -- requiresPartNumber isn't known
+  // until the category query resolves, but the overwhelming majority of
+  // categories need it, so the lookup is started speculatively (a
+  // partNumber was at least submitted) and simply discarded in the rare
+  // case it turns out not to apply. Keeps this at roughly the same
+  // latency it had before ModuleCategory.requiresPartNumber existed,
+  // instead of adding a second sequential round trip to every check.
+  const [category, speculativeLookup] = await Promise.all([
+    prisma.moduleCategory.findUnique({ where: { id: categoryId } }),
+    parsed.partNumber?.trim()
+      ? lookupCompatibility({
+          make: parsed.vehicle.make,
+          model: parsed.vehicle.model,
+          year: parsed.vehicle.year,
+          categoryId,
+          partNumber: parsed.partNumber,
+        })
+      : null,
+  ]);
+
+  if (!category) {
+    throw new Error("Invalid categoryId");
+  }
+
+  // Vehicle Diagnostics (and any future category like it): no part
+  // number or CompatibilityEntry involved at all -- this category
+  // always resolves to its own one Service, for any vehicle. entryId is
+  // null (never a real CompatibilityEntry id) -- placeOrder checks for
+  // that explicitly and stores Order.matchedEntryId as null too.
+  if (!category.requiresPartNumber) {
+    const services = await prisma.service.findMany({
+      where: { categoryId },
+      include: { priceTier: true },
+    });
+    const matched = services.length > 0;
+    return {
+      matched,
+      entryId: null,
+      services: matched
+        ? services.map((service) => ({
+            id: service.id.toString(),
+            name: service.name,
+            priceCents: service.priceTier.amountCents > 0 ? service.priceTier.amountCents : null,
+          }))
+        : [],
+    };
+  }
+
+  if (!parsed.partNumber?.trim() || !parsed.stickerPhotoUrl?.trim()) {
+    throw new Error("partNumber and stickerPhotoUrl are required for this category");
+  }
+  if (!isVercelBlobUrl(parsed.stickerPhotoUrl)) {
+    throw new Error("stickerPhotoUrl must be a Vercel Blob URL");
+  }
+
+  // speculativeLookup is only null here if partNumber was somehow empty
+  // after all -- already rejected just above.
+  const { vehicle, entry } = speculativeLookup!;
 
   // No matching vehicle row at all (shouldn't normally happen — the
   // wizard only ever offers makes/models/years that exist — but never

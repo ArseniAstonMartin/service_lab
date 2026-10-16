@@ -13,6 +13,7 @@ import {
   Loader2,
   Settings2,
   ShieldAlert,
+  Stethoscope,
   Wrench,
   XCircle,
   type LucideIcon,
@@ -47,6 +48,7 @@ const CATEGORY_ICONS: Record<string, LucideIcon> = {
   BCM: CircuitBoard,
   "Instrument Cluster": Gauge,
   "Battery/BMS": BatteryCharging,
+  "Vehicle Diagnostics": Stethoscope,
 };
 
 function iconFor(name: string): LucideIcon {
@@ -92,6 +94,12 @@ function StickerReference() {
  * action once every field is filled in. Everything downstream —
  * checkCompatibility itself, the match result shape, and where a
  * matched vs. pending-review order goes next — is unchanged.
+ *
+ * A category with requiresPartNumber false (Vehicle Diagnostics) skips
+ * the part number + photo section entirely — there's no module/part
+ * number involved, so checkCompatibility (and placeOrder) resolve that
+ * category straight to its own one Service instead of looking up a
+ * CompatibilityEntry.
  */
 export function VehicleModulePartForm({
   makes,
@@ -172,9 +180,17 @@ export function VehicleModulePartForm({
 
   // --- Module category ---
   const categoryId = state.categoryId;
+  const selectedCategory = categories.find((category) => category.id === categoryId);
+  // Defaults to true (show the part number section) before any category
+  // is picked yet — matches every category except Vehicle Diagnostics.
+  const requiresPartNumber = selectedCategory?.requiresPartNumber ?? true;
 
   function handleCategorySelect(id: string) {
     update({ categoryId: id });
+    // A category switch can change whether a part number is even
+    // relevant — drop any previous check result rather than show a
+    // stale "Found it" for the category just left.
+    setResult(null);
   }
 
   // --- Part number / photo / compatibility check ---
@@ -212,10 +228,15 @@ export function VehicleModulePartForm({
   }
 
   const canCheck =
-    Boolean(vehicleComplete && categoryId && partNumber.trim() && stickerPhotoUrl) && !isChecking;
+    Boolean(
+      vehicleComplete &&
+        categoryId &&
+        (requiresPartNumber ? partNumber.trim() && stickerPhotoUrl : true),
+    ) && !isChecking;
 
   async function handleCheck() {
-    if (!state.vehicle || !categoryId || !stickerPhotoUrl || !vehicleComplete) return;
+    if (!state.vehicle || !categoryId || !vehicleComplete) return;
+    if (requiresPartNumber && !stickerPhotoUrl) return;
 
     setIsChecking(true);
     setCheckError(null);
@@ -224,12 +245,15 @@ export function VehicleModulePartForm({
       const matchResult = await checkCompatibility({
         vehicle: state.vehicle,
         categoryId,
-        partNumber,
-        stickerPhotoUrl,
+        ...(requiresPartNumber ? { partNumber, stickerPhotoUrl: stickerPhotoUrl! } : {}),
       });
 
       setResult(matchResult);
-      update({ partNumber, stickerPhotoUrl, matchResult });
+      update({
+        partNumber: requiresPartNumber ? partNumber : "",
+        stickerPhotoUrl: requiresPartNumber ? stickerPhotoUrl : null,
+        matchResult,
+      });
     } catch (err) {
       setCheckError(
         err instanceof Error ? err.message : "Could not check compatibility. Please try again.",
@@ -337,35 +361,42 @@ export function VehicleModulePartForm({
         </div>
       </div>
 
-      <div className="space-y-4">
-        <h2 className="text-sm font-semibold text-foreground">Part number & photo</h2>
-        <div className="space-y-2">
-          <Label htmlFor="part-number">Part Number</Label>
-          <Input
-            id="part-number"
-            value={partNumber}
-            onChange={(event) => handlePartNumberChange(event.target.value)}
-            placeholder="e.g. 12345678"
-          />
-          <p className="text-xs text-muted-foreground">
-            This is the catalog part number printed on the module&apos;s label —{" "}
-            <strong>not</strong> its individual serial number.
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <Label>Photo of the module&apos;s label</Label>
-          <div className="flex gap-4">
-            <FileUpload
-              value={stickerPhotoUrl}
-              onChange={handlePhotoChange}
-              purpose="wizard"
-              pathPrefix="pending/stickers"
+      {requiresPartNumber ? (
+        <div className="space-y-4">
+          <h2 className="text-sm font-semibold text-foreground">Part number & photo</h2>
+          <div className="space-y-2">
+            <Label htmlFor="part-number">Part Number</Label>
+            <Input
+              id="part-number"
+              value={partNumber}
+              onChange={(event) => handlePartNumberChange(event.target.value)}
+              placeholder="e.g. 12345678"
             />
-            <StickerReference />
+            <p className="text-xs text-muted-foreground">
+              This is the catalog part number printed on the module&apos;s label —{" "}
+              <strong>not</strong> its individual serial number.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Photo of the module&apos;s label</Label>
+            <div className="flex gap-4">
+              <FileUpload
+                value={stickerPhotoUrl}
+                onChange={handlePhotoChange}
+                purpose="wizard"
+                pathPrefix="pending/stickers"
+              />
+              <StickerReference />
+            </div>
           </div>
         </div>
-      </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          No part number needed — tell us the symptoms on the next step and we&apos;ll take it
+          from there.
+        </p>
+      )}
 
       {checkError ? <p className="text-sm text-destructive">{checkError}</p> : null}
 
@@ -374,16 +405,18 @@ export function VehicleModulePartForm({
           <div className="flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 p-3 text-sm">
             <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
             <span>
-              Found it — {result.services.length} service
-              {result.services.length === 1 ? "" : "s"} confirmed for this part.
+              {requiresPartNumber
+                ? `Found it — ${result.services.length} service${result.services.length === 1 ? "" : "s"} confirmed for this part.`
+                : "Vehicle Diagnostics is available for your vehicle."}
             </span>
           </div>
         ) : (
           <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
             <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
             <span>
-              We don&apos;t have this part number confirmed yet. Your order will be submitted for
-              manual review — our team will check the photo and part number and follow up.
+              {requiresPartNumber
+                ? "We don't have this part number confirmed yet. Your order will be submitted for manual review — our team will check the photo and part number and follow up."
+                : "Vehicle Diagnostics isn't available right now — please contact us directly."}
             </span>
           </div>
         )
@@ -398,10 +431,12 @@ export function VehicleModulePartForm({
           {isChecking ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Checking...
+              {requiresPartNumber ? "Checking..." : "Loading..."}
             </>
-          ) : (
+          ) : requiresPartNumber ? (
             "Check compatibility"
+          ) : (
+            "Continue"
           )}
         </Button>
       )}

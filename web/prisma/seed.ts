@@ -22,6 +22,7 @@
  */
 import { PrismaClient, EntrySource, QuestionAnswerType } from "@prisma/client";
 import { ensureTeslaBatteryCatalog } from "./tesla-battery-catalog";
+import { ensureVehicleDiagnosticsCatalog } from "./vehicle-diagnostics-catalog";
 
 const prisma = new PrismaClient();
 
@@ -287,6 +288,7 @@ async function main() {
   await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(78392410)`;
     await ensureTeslaBatteryCatalog(tx, process.env.TESLA_BATTERY_PRICE_CENTS ? Number(process.env.TESLA_BATTERY_PRICE_CENTS) : undefined);
+    await ensureVehicleDiagnosticsCatalog(tx, process.env.VEHICLE_DIAGNOSTICS_PRICE_CENTS ? Number(process.env.VEHICLE_DIAGNOSTICS_PRICE_CENTS) : undefined);
   });
 
   const allowSample = process.env.SEED_SAMPLE === "true" && process.env.VERCEL_ENV !== "production";

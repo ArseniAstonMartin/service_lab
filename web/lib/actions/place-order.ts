@@ -5,7 +5,8 @@ import { z } from "zod";
 import type { OrderStatus, PhotoType } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { normalizePartNumber } from "@/lib/domain/part-number";
-import { decideMatch } from "@/lib/domain/compatibility";
+import { decideMatch, type MatchResult } from "@/lib/domain/compatibility";
+import { NO_PART_NUMBER_SENTINEL } from "@/lib/domain/coverage";
 import { lookupCompatibility, servicesFromEntry } from "@/lib/services/compatibility-lookup";
 import { quote } from "@/lib/domain/quote";
 import { generateTrackingToken } from "@/lib/domain/token";
@@ -29,8 +30,14 @@ const placeOrderSchema = z.object({
     year: z.number().int(),
   }),
   categoryId: z.string().min(1),
-  partNumber: z.string().min(1),
-  stickerPhotoUrl: z.string().min(1),
+  // Both required for an ordinary part-number category; both ignored
+  // (and, on the wizard side, never even shown) for a category like
+  // Vehicle Diagnostics with requiresPartNumber false. Enforced below,
+  // once the category itself has been looked up -- see
+  // lib/actions/compatibility.ts's checkCompatibility for the same
+  // shape-can't-express-this-conditional-requirement reasoning.
+  partNumber: z.string(),
+  stickerPhotoUrl: z.string(),
   // Present only when the wizard's own (client-side) match result was
   // matched and a service was picked on /order/service. Never trusted as
   // proof of a match on its own — see below, the server re-derives the
@@ -115,10 +122,6 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
     };
   }
 
-  if (!isVercelBlobUrl(parsed.stickerPhotoUrl)) {
-    throw new Error("stickerPhotoUrl must be a Vercel Blob URL");
-  }
-
   let categoryId: bigint;
   try {
     categoryId = BigInt(parsed.categoryId);
@@ -126,30 +129,91 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
     throw new Error("Invalid categoryId");
   }
 
-  const normalizedPartNumber = normalizePartNumber(parsed.partNumber);
-
-  const { vehicle, entry } = await lookupCompatibility({
-    make: parsed.vehicle.make,
-    model: parsed.vehicle.model,
-    year: parsed.vehicle.year,
-    categoryId,
-    partNumber: parsed.partNumber,
-  });
-  // Order.vehicleId is required: the wizard only ever offers real
-  // vehicles (TASK-016), so this shouldn't normally happen, but there is
-  // no vehicle to attach the order to if it does.
-  if (!vehicle) {
-    throw new Error("Vehicle not found");
+  // Category and the ordinary vehicle/part-number lookup run in
+  // parallel -- same reasoning as checkCompatibility's identical
+  // Promise.all: requiresPartNumber isn't known until the category
+  // query resolves, but speculatively starting the lookup whenever a
+  // part number was at least submitted avoids adding a second
+  // sequential round trip to every order for the common case.
+  const [category, speculativeLookup] = await Promise.all([
+    prisma.moduleCategory.findUnique({ where: { id: categoryId } }),
+    parsed.partNumber.trim()
+      ? lookupCompatibility({
+          make: parsed.vehicle.make,
+          model: parsed.vehicle.model,
+          year: parsed.vehicle.year,
+          categoryId,
+          partNumber: parsed.partNumber,
+        })
+      : null,
+  ]);
+  if (!category) {
+    throw new Error("Invalid categoryId");
   }
 
-  const entrySummary = entry ? { id: entry.id.toString() } : null;
-  const entryServices = entry ? servicesFromEntry(entry) : [];
-
+  let vehicleId: bigint;
+  let normalizedPartNumber: string;
   // The single source of truth for whether this is a match — exactly
-  // TASK-010's decideMatch(), the same rule checkCompatibility applies.
-  // The client's own (TASK-018) match result plays no part in this
-  // decision.
-  const matchResult = decideMatch(entrySummary, entryServices);
+  // TASK-010's decideMatch() for an ordinary category, or the
+  // equivalent "this category's one Service always matches" rule
+  // checkCompatibility applies for one like Vehicle Diagnostics. The
+  // client's own (TASK-018) match result plays no part in this decision
+  // either way.
+  let matchResult: MatchResult;
+
+  if (category.requiresPartNumber) {
+    if (!isVercelBlobUrl(parsed.stickerPhotoUrl)) {
+      throw new Error("stickerPhotoUrl must be a Vercel Blob URL");
+    }
+
+    normalizedPartNumber = normalizePartNumber(parsed.partNumber);
+
+    // speculativeLookup is only null here if partNumber was somehow
+    // empty after all -- isVercelBlobUrl above doesn't catch that, so
+    // guard explicitly rather than non-null-asserting blindly.
+    if (!speculativeLookup) {
+      throw new Error("partNumber is required for this category");
+    }
+    const { vehicle, entry } = speculativeLookup;
+    // Order.vehicleId is required: the wizard only ever offers real
+    // vehicles (TASK-016), so this shouldn't normally happen, but there
+    // is no vehicle to attach the order to if it does.
+    if (!vehicle) {
+      throw new Error("Vehicle not found");
+    }
+    vehicleId = vehicle.id;
+
+    const entrySummary = entry ? { id: entry.id.toString() } : null;
+    const entryServices = entry ? servicesFromEntry(entry) : [];
+    matchResult = decideMatch(entrySummary, entryServices);
+  } else {
+    normalizedPartNumber = NO_PART_NUMBER_SENTINEL;
+
+    const vehicle = await prisma.vehicle.findUnique({
+      where: { make_model_year: parsed.vehicle },
+    });
+    if (!vehicle) {
+      throw new Error("Vehicle not found");
+    }
+    vehicleId = vehicle.id;
+
+    const services = await prisma.service.findMany({
+      where: { categoryId },
+      include: { priceTier: true },
+    });
+    const matched = services.length > 0;
+    matchResult = {
+      matched,
+      entryId: null,
+      services: matched
+        ? services.map((service) => ({
+            id: service.id.toString(),
+            name: service.name,
+            priceCents: service.priceTier.amountCents > 0 ? service.priceTier.amountCents : null,
+          }))
+        : [],
+    };
+  }
 
   // Fields that differ between the two paths; filled in below.
   let matchedEntryId: bigint | null = null;
@@ -163,10 +227,10 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
   if (matchResult.matched) {
     const selected = matchResult.services.find((service) => service.id === parsed.serviceId);
     if (!selected) {
-      throw new Error("serviceId must be one of the services confirmed for this part number");
+      throw new Error("serviceId must be one of the confirmed services");
     }
 
-    matchedEntryId = BigInt(matchResult.entryId as string);
+    matchedEntryId = matchResult.entryId !== null ? BigInt(matchResult.entryId as string) : null;
     serviceId = BigInt(selected.id);
 
     const feeSetting = await prisma.appSetting.findUnique({
@@ -223,7 +287,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
     const created = await tx.order.create({
       data: {
         trackingToken: generateTrackingToken(),
-        vehicleId: vehicle.id,
+        vehicleId,
         categoryId,
         partNumberEntered: normalizedPartNumber,
         matchedEntryId,
@@ -243,9 +307,14 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
       },
     });
 
-    await tx.orderPhoto.create({
-      data: { orderId: created.id, photoType: "sticker", blobUrl: parsed.stickerPhotoUrl },
-    });
+    // No sticker photo for a no-part-number category (Vehicle
+    // Diagnostics) — there's no module label to photograph, and the
+    // wizard never collects one for it.
+    if (category.requiresPartNumber) {
+      await tx.orderPhoto.create({
+        data: { orderId: created.id, photoType: "sticker", blobUrl: parsed.stickerPhotoUrl },
+      });
+    }
 
     for (const [questionCode, blobUrl] of Object.entries(photoAnswersToStore)) {
       await tx.orderPhoto.create({

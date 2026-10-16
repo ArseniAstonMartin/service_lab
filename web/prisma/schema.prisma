@@ -39,6 +39,13 @@ model Vehicle {
 model ModuleCategory {
   id   BigInt @id @default(autoincrement())
   name String @db.VarChar(50)
+  // False only for categories like Vehicle Diagnostics that aren't about
+  // a specific module/part number at all -- the wizard skips the part
+  // number + photo step entirely for these, and checkCompatibility /
+  // placeOrder skip the CompatibilityEntry lookup, going straight to
+  // this category's one Service. True (the default) preserves every
+  // existing category's current behavior unchanged.
+  requiresPartNumber Boolean @default(true) @map("requires_part_number")
 
   compatibilityEntries CompatibilityEntry[]
   services             Service[]

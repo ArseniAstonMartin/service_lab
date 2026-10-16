@@ -9,3 +9,12 @@ export const COVERAGE_SENTINEL_YEAR = 2000;
 
 export const BATTERY_CATEGORY = "Battery/BMS";
 export const TESLA_BATTERY_SERVICE = "Tesla Battery Reset";
+
+export const DIAGNOSTICS_CATEGORY = "Vehicle Diagnostics";
+export const VEHICLE_DIAGNOSTICS_SERVICE = "Vehicle Diagnostics";
+
+// Order.partNumberEntered is NOT NULL -- a category with
+// requiresPartNumber false (Vehicle Diagnostics) still needs something
+// stored there, since there is no real schema change to make it
+// optional just for this one case.
+export const NO_PART_NUMBER_SENTINEL = "N/A";

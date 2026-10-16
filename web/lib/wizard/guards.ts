@@ -20,19 +20,15 @@ const STEP_PATHS: Record<WizardStep, string> = {
   shipping: "/order/shipping",
 };
 
-/** True once the wizard has gone through /order/vehicle: a vehicle,
- * module category, part number, and photo were all submitted and
- * checkCompatibility actually ran (a result was stored, matched either
- * way). Deliberately checks matchResult's presence, not its outcome:
- * that's /order/service's job below. */
+/** True once the wizard has gone through /order/vehicle: a vehicle and
+ * module category were picked and checkCompatibility actually ran (a
+ * result was stored, matched either way). Deliberately checks
+ * matchResult's presence, not its outcome: that's /order/service's job
+ * below. Doesn't require partNumber/stickerPhotoUrl -- those stay empty
+ * for a category with requiresPartNumber false (Vehicle Diagnostics),
+ * where matchResult alone already proves a real check happened. */
 function hasCompatibilityChecked(state: WizardState): boolean {
-  return (
-    Boolean(state.vehicle) &&
-    Boolean(state.categoryId) &&
-    Boolean(state.partNumber) &&
-    Boolean(state.stickerPhotoUrl) &&
-    state.matchResult !== null
-  );
+  return Boolean(state.vehicle) && Boolean(state.categoryId) && state.matchResult !== null;
 }
 
 /** True only when the compatibility check came back matched with at
