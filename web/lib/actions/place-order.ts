@@ -247,12 +247,16 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
     // Re-validate required answers/photos against the LIVE question set
     // for this service (not just whatever the client happened to submit
     // — a stale or hand-crafted payload could omit a required field).
+    // Same FOLLOW_UP exclusion as lib/actions/questions.ts's
+    // getQuestions (which is what actually rendered the form the
+    // customer filled in) -- must match exactly, or this would reject
+    // an order for a required answer to a question that was never shown.
     const service = await prisma.service.findUniqueOrThrow({ where: { id: serviceId } });
     const ownQuestions = await prisma.questionDefinition.findMany({
       where: { questionSetCode: service.questionSetCode },
     });
     const followUpQuestions =
-      service.questionSetCode === "FOLLOW_UP"
+      service.questionSetCode === "FOLLOW_UP" || !category.requiresPartNumber
         ? []
         : await prisma.questionDefinition.findMany({ where: { questionSetCode: "FOLLOW_UP" } });
     const questions = [...ownQuestions, ...followUpQuestions];

@@ -34,14 +34,18 @@ test("Vehicle Diagnostics skips part number/photo and /order/service, landing on
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await expect(page).toHaveURL(/\/order\/details$/);
 
+  // No module-specific wording or questions for this category: the
+  // description label is swapped, and the generic FOLLOW_UP set ("...
+  // after this module is reinstalled") is excluded entirely -- neither
+  // applies when there's no module involved.
+  await expect(page.getByText("Describe what's going on with your vehicle")).toBeVisible();
+  await expect(page.getByText("what happened to the module", { exact: false })).toHaveCount(0);
+  await expect(page.getByText("after this module is reinstalled", { exact: false })).toHaveCount(0);
+  await expect(page.getByRole("radiogroup")).toHaveCount(0);
+
   await page.locator("#description").fill("Dashboard warning light check; no order will be submitted.");
   await page.locator("#question-symptoms").fill("ABS and traction control lights on intermittently.");
   await page.locator("#question-when_started").fill("Started about a week ago, happens randomly.");
-  for (const group of await page.getByRole("radiogroup").all()) {
-    if (!(await group.locator('[aria-pressed="true"]').count())) {
-      await group.getByRole("button", { name: "No", exact: true }).click();
-    }
-  }
   await page.getByRole("button", { name: "Next", exact: true }).click();
 
   await expect(page).toHaveURL(/\/order\/shipping$/);

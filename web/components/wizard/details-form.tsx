@@ -19,6 +19,13 @@ import { getQuestions, type QuestionSummary } from "@/lib/actions/questions";
  * step routed here directly because nothing matched) shows only the
  * description, per the acceptance criteria: there is no service yet to
  * drive any questions off of.
+ *
+ * The description field's own label/error text is also the one
+ * module-specific thing on this otherwise fully data-driven page —
+ * swapped out for a no-part-number category (Vehicle Diagnostics),
+ * which isn't about a module at all. The question set itself needs no
+ * such swap here: getQuestions() already leaves the module-specific
+ * FOLLOW_UP set out for that category server-side.
  */
 export function DetailsForm() {
   const router = useRouter();
@@ -29,6 +36,12 @@ export function DetailsForm() {
 
   const serviceId = state.serviceId;
   const isMatchedPath = Boolean(serviceId);
+  // True for a category with no part number at all (Vehicle Diagnostics)
+  // — VehicleModulePartForm only ever leaves state.partNumber empty for
+  // that case; every part-number category requires a non-empty one to
+  // reach this step. No categories list is available here to check
+  // requiresPartNumber directly, so this is the same signal in practice.
+  const isNoPartNumberOrder = !state.partNumber.trim();
 
   const [description, setDescription] = useState(state.description);
   const [descriptionError, setDescriptionError] = useState<string | null>(null);
@@ -70,7 +83,11 @@ export function DetailsForm() {
   function handleNext() {
     const trimmedDescription = description.trim();
     if (!trimmedDescription) {
-      setDescriptionError("Please describe what's needed and what happened to the module.");
+      setDescriptionError(
+        isNoPartNumberOrder
+          ? "Please describe what's going on with your vehicle."
+          : "Please describe what's needed and what happened to the module.",
+      );
       return;
     }
     setDescriptionError(null);
@@ -112,7 +129,9 @@ export function DetailsForm() {
     <div className="space-y-6">
       <div className="space-y-2">
         <Label htmlFor="description">
-          Describe what's needed and what happened to the module
+          {isNoPartNumberOrder
+            ? "Describe what's going on with your vehicle"
+            : "Describe what's needed and what happened to the module"}
           <span className="text-destructive"> *</span>
         </Label>
         <Textarea
