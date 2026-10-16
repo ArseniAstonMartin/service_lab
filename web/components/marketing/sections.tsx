@@ -2,24 +2,23 @@ import Link from "next/link";
 import {
   ArrowRight,
   BadgeCheck,
-  Battery,
   Check,
   Cpu,
-  Disc3,
   LockKeyhole,
   Package,
   Settings,
   ShieldCheck,
-  UserCog,
   UsersRound,
   Zap,
 } from "lucide-react";
 import { MARKETING_SERVICES, MAIL_STEPS } from "@/lib/marketing";
 import { ActionLink, NationwideMap, PhotoTile, ServiceIcon } from "./ui";
+import { AirbagResetIcon, BatteryResetIcon, EcmResetIcon, SasResetIcon } from "./reset-icons";
 
-/** One icon per reset type this card covers (airbag/occupant, battery, ECM,
- * SAS) — matches the four-icon reference layout for this specific card. */
-const AIRBAG_RESET_ICONS = [UserCog, Battery, Cpu, Disc3];
+/** One icon per reset type this card covers (airbag, battery, ECM, SAS) —
+ * custom pictograms matching a supplied reference image, not the closest
+ * generic Lucide icons. */
+const AIRBAG_RESET_ICONS = [AirbagResetIcon, BatteryResetIcon, EcmResetIcon, SasResetIcon];
 
 export function ServiceCards() {
   return (
@@ -40,7 +39,7 @@ export function ServiceCards() {
               {isAirbagReset ? (
                 <div className="m-service-icon-row" aria-hidden="true">
                   {AIRBAG_RESET_ICONS.map((Icon, index) => (
-                    <Icon key={index} size={20} strokeWidth={1.7} />
+                    <Icon key={index} size={20} />
                   ))}
                 </div>
               ) : (
