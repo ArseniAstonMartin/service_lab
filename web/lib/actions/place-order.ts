@@ -194,15 +194,10 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
   let matchResult: MatchResult;
 
   if (category.requiresPartNumber) {
-    if (!isVercelBlobUrl(parsed.stickerPhotoUrl)) {
-      throw new Error("stickerPhotoUrl must be a Vercel Blob URL");
-    }
-
     normalizedPartNumber = normalizePartNumber(parsed.partNumber);
 
     // speculativeLookup is only null here if partNumber was somehow
-    // empty after all -- isVercelBlobUrl above doesn't catch that, so
-    // guard explicitly rather than non-null-asserting blindly.
+    // empty after all.
     if (!speculativeLookup) {
       throw new Error("partNumber is required for this category");
     }
@@ -218,6 +213,17 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
     const entrySummary = entry ? { id: entry.id.toString() } : null;
     const entryServices = entry ? servicesFromEntry(entry) : [];
     matchResult = decideMatch(entrySummary, entryServices);
+
+    // A photo is only required once the part number couldn't be
+    // auto-matched -- that's the one case a human needs it to manually
+    // verify the module. An auto-matched part number was never shown a
+    // photo upload control in the wizard at all (VehicleModulePartForm
+    // only reveals it after a not-matched result), so never require one.
+    if (!matchResult.matched && !isVercelBlobUrl(parsed.stickerPhotoUrl)) {
+      throw new Error(
+        "A photo of the module's label is required when the part number can't be auto-matched.",
+      );
+    }
   } else {
     normalizedPartNumber = NO_PART_NUMBER_SENTINEL;
 
@@ -343,10 +349,12 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
       },
     });
 
-    // No sticker photo for a no-part-number category (Vehicle
-    // Diagnostics) — there's no module label to photograph, and the
-    // wizard never collects one for it.
-    if (category.requiresPartNumber) {
+    // A sticker photo only ever exists when the part number wasn't
+    // auto-matched (checked above) -- there's none to store for a
+    // no-part-number category (Vehicle Diagnostics, never asked for
+    // one) or for a successfully auto-matched part number (the wizard
+    // never shows the upload control for that case either).
+    if (isVercelBlobUrl(parsed.stickerPhotoUrl)) {
       await tx.orderPhoto.create({
         data: { orderId: created.id, photoType: "sticker", blobUrl: parsed.stickerPhotoUrl },
       });

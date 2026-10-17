@@ -102,8 +102,9 @@ function ReviewRow({
  * The return address (and its validation) is skipped entirely for a
  * no-part-number category (Vehicle Diagnostics) — nothing is being
  * shipped back, so there's nothing to collect. stickerPhotoUrl is also
- * genuinely null for that category (VehicleModulePartForm never
- * collects one), not a missing-field error to block the submit over.
+ * genuinely null both for that category and for a matched part-number
+ * order (VehicleModulePartForm never collects one unless a check comes
+ * back not-matched), not a missing-field error to block the submit over.
  */
 export function ShippingForm() {
   const router = useRouter();
@@ -207,11 +208,12 @@ export function ShippingForm() {
           "Your order is missing some required information — please go back and check each step.",
         );
       }
-      // stickerPhotoUrl is only ever required for a part-number category
-      // — null is correct and expected for one like Vehicle Diagnostics
-      // (VehicleModulePartForm never collects one for it), not a missing
-      // field to reject the submit over.
-      if (!isNoPartNumberOrder && !state.stickerPhotoUrl) {
+      // stickerPhotoUrl is only ever required once the part number
+      // couldn't be auto-matched — a matched part-number order (or one
+      // like Vehicle Diagnostics with no part number at all) never
+      // collects one, so null is correct and expected there, not a
+      // missing field to reject the submit over.
+      if (!isNoPartNumberOrder && state.matchResult?.matched === false && !state.stickerPhotoUrl) {
         throw new Error(
           "Your order is missing some required information — please go back and check each step.",
         );

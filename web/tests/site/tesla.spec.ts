@@ -1,14 +1,15 @@
 import { expect, test, type Page } from "@playwright/test";
 
 // Reads the configured coverage database. Never uploads files or submits orders.
-async function chooseTesla(page: Page, category: string) {
-  await page.addInitScript(() => {
-    if (!sessionStorage.getItem("ecu-wizard-state")) {
+async function chooseTesla(page: Page, category: string, options: { seedPhoto?: boolean } = {}) {
+  const { seedPhoto = true } = options;
+  await page.addInitScript((seed) => {
+    if (seed && !sessionStorage.getItem("ecu-wizard-state")) {
       sessionStorage.setItem("ecu-wizard-state", JSON.stringify({
         stickerPhotoUrl: "https://test.public.blob.vercel-storage.com/tesla-test.png",
       }));
     }
-  });
+  }, seedPhoto);
   await page.route("https://test.public.blob.vercel-storage.com/**", (route) => route.fulfill({
     contentType: "image/png",
     body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", "base64"),
@@ -68,11 +69,41 @@ test("Tesla SRS uses canonical OEM numbers and rejects battery numbers", async (
   await chooseTesla(page, "Airbag/SRS");
   await page.getByLabel("Part Number", { exact: true }).fill("1598486-00-D");
   await page.getByRole("button", { name: "Check compatibility" }).click();
-  await expect(page.getByText(/We don't have this part number confirmed yet/)).toBeVisible();
+  await expect(
+    page.getByText(
+      "We couldn't confirm this part number in our system yet. To help us verify compatibility, please upload a photo of your module with part number visible.",
+    ),
+  ).toBeVisible();
   await page.getByLabel("Part Number", { exact: true }).fill("1512876-00-D");
   await page.getByRole("button", { name: "Check compatibility" }).click();
   await expect(page.getByText("Found it — 1 service confirmed for this part.")).toBeVisible();
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await expect(page.getByRole("radio", { name: /Crash Data Reset/ })).toBeVisible();
   await expect(page.getByText("Tesla Battery Reset", { exact: true })).toHaveCount(0);
+});
+
+test("Tesla SRS: Continue requires a photo only once a check comes back not-matched", async ({ page }) => {
+  await chooseTesla(page, "Airbag/SRS", { seedPhoto: false });
+  const continueButton = page.getByRole("button", { name: "Continue", exact: true });
+  const checkButton = page.getByRole("button", { name: "Check compatibility", exact: true });
+
+  // Hidden and not required before any check has run.
+  await expect(page.getByText(/upload a photo of your module/)).toHaveCount(0);
+  await page.getByLabel("Part Number", { exact: true }).fill("1598486-00-D");
+  // Typing a part number alone is enough to enable both buttons -- no
+  // photo needed yet.
+  await expect(continueButton).toBeEnabled();
+  await expect(checkButton).toBeEnabled();
+
+  // Clicking Continue itself (not just the preview button) runs the
+  // check -- and a fresh not-matched result stays on this page instead
+  // of navigating on, revealing the now-required photo upload.
+  await continueButton.click();
+  await expect(page).toHaveURL(/\/order\/vehicle$/);
+  await expect(
+    page.getByText(
+      "We couldn't confirm this part number in our system yet. To help us verify compatibility, please upload a photo of your module with part number visible.",
+    ),
+  ).toBeVisible();
+  await expect(continueButton).toBeDisabled();
 });

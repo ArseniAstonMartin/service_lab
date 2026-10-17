@@ -68,7 +68,7 @@ test("Vehicle Diagnostics skips part number/photo and /order/service, landing on
   await expect(page.getByRole("button", { name: "Place order", exact: true })).toBeEnabled();
 });
 
-test("a regular (part-number) category still shows the optional preview button, separate from Continue", async ({
+test("a regular (part-number) category shows Check compatibility, separate from Continue, enabled once a part number is typed", async ({
   page,
 }) => {
   await page.goto("/order/vehicle");
@@ -80,12 +80,22 @@ test("a regular (part-number) category still shows the optional preview button, 
   await page.getByRole("option", { name: "2020", exact: true }).click();
 
   await page.getByRole("button", { name: "ECM/PCM", exact: true }).click();
-  await expect(page.getByText("Part number & photo", { exact: true })).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Check compatibility (optional)", exact: true }),
-  ).toBeVisible();
-  // Continue exists and is disabled until the part number/photo are
-  // filled -- it's the required action, but it's never enabled without
-  // the fields a part-number category actually needs.
-  await expect(page.getByRole("button", { name: "Continue", exact: true })).toBeDisabled();
+  // Heading says just "Part number" -- the photo upload (and the
+  // "& photo" wording) is hidden until a check actually comes back
+  // not-matched, not shown up front.
+  await expect(page.getByText("Part number", { exact: true })).toBeVisible();
+  await expect(page.getByText("Part number & photo", { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/upload a photo of your module/)).toHaveCount(0);
+
+  const checkButton = page.getByRole("button", { name: "Check compatibility", exact: true });
+  const continueButton = page.getByRole("button", { name: "Continue", exact: true });
+  await expect(checkButton).toBeVisible();
+  // Both start disabled -- no part number typed yet.
+  await expect(checkButton).toBeDisabled();
+  await expect(continueButton).toBeDisabled();
+
+  // Typing a part number is enough to enable both -- no photo needed yet.
+  await page.getByLabel("Part Number", { exact: true }).fill("12345678");
+  await expect(checkButton).toBeEnabled();
+  await expect(continueButton).toBeEnabled();
 });

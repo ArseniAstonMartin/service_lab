@@ -4,7 +4,6 @@ import "server-only";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { decideMatch, type MatchResult } from "@/lib/domain/compatibility";
-import { isVercelBlobUrl } from "@/lib/blob";
 import { lookupCompatibility, servicesFromEntry } from "@/lib/services/compatibility-lookup";
 
 const checkCompatibilitySchema = z.object({
@@ -14,15 +13,20 @@ const checkCompatibilitySchema = z.object({
     year: z.number().int(),
   }),
   categoryId: z.string().min(1),
-  // Required (PRD 4.2: "Photo upload (required) of the module's label")
-  // for an ordinary part-number category, but NOT sent at all for a
-  // category like Vehicle Diagnostics (ModuleCategory.requiresPartNumber
-  // false) -- the wizard never shows those fields for one. Enforced
-  // below, after the category's own requiresPartNumber is looked up,
-  // not in this shape (a fixed zod shape can't make a field conditionally
+  // Required for an ordinary part-number category, but NOT sent at all
+  // for a category like Vehicle Diagnostics (ModuleCategory.requiresPartNumber
+  // false) -- the wizard never shows that field for one. Enforced below,
+  // after the category's own requiresPartNumber is looked up, not in
+  // this shape (a fixed zod shape can't make a field conditionally
   // required on a value that isn't known until a query runs).
+  //
+  // No stickerPhotoUrl here: a photo was never part of the lookup below
+  // (it only ever checks vehicle + category + partNumber) -- it's only
+  // required later, at placeOrder time, and only when the part number
+  // couldn't be auto-matched (so a human has something to verify
+  // against). Collecting it this early, before a customer even knows
+  // whether it'll be needed, was the whole thing being fixed here.
   partNumber: z.string().optional(),
-  stickerPhotoUrl: z.string().optional(),
 });
 
 export type CheckCompatibilityInput = z.infer<typeof checkCompatibilitySchema>;
@@ -131,11 +135,8 @@ export async function checkCompatibility(
     };
   }
 
-  if (!parsed.partNumber?.trim() || !parsed.stickerPhotoUrl?.trim()) {
-    throw new Error("partNumber and stickerPhotoUrl are required for this category");
-  }
-  if (!isVercelBlobUrl(parsed.stickerPhotoUrl)) {
-    throw new Error("stickerPhotoUrl must be a Vercel Blob URL");
+  if (!parsed.partNumber?.trim()) {
+    throw new Error("partNumber is required for this category");
   }
 
   // speculativeLookup is only null here if partNumber was somehow empty

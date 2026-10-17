@@ -94,10 +94,16 @@ function StickerReference() {
  * old flow made the customer click "Check compatibility", read the
  * result, then click "Continue" a second time to do the exact same
  * thing placeOrder re-derives server-side regardless) and routes
- * straight to the right next step. "Check compatibility" still exists,
- * but only as an optional preview button for a category that needs a
- * part number — useful if someone wants to see the result before
- * deciding what to type in Details, not required to proceed.
+ * straight to the right next step. "Check compatibility" still exists
+ * as a preview button for a category that needs a part number, useful
+ * for seeing the result before deciding what to type in Details.
+ *
+ * The photo upload is hidden up front and only appears once a check
+ * actually comes back not-matched — that's the one case a human needs
+ * it to manually verify the module, so nothing is asked for before it's
+ * known to be needed (see `needsPhoto` below). A fresh not-matched
+ * result stops "Continue" from navigating on, so the customer sees the
+ * now-required upload instead of being carried past it.
  *
  * A category with requiresPartNumber false (Vehicle Diagnostics) skips
  * the part number + photo section entirely (hidden by default, in fact
@@ -233,19 +239,36 @@ export function VehicleModulePartForm({
 
   function handlePartNumberChange(next: string) {
     setPartNumber(next);
+    // A changed part number invalidates any prior check result -- and
+    // the photo that went with it, if the old result was a no-match:
+    // that photo was for proving the *old* part number, not this one.
     setResult(null);
+    setStickerPhotoUrl(null);
   }
 
   function handlePhotoChange(url: string | null) {
+    // Doesn't touch `result` -- uploading a photo doesn't change the
+    // compatibility check itself, and clearing it here would hide the
+    // very section the customer is in the middle of filling out.
     setStickerPhotoUrl(url);
-    setResult(null);
   }
 
+  // A photo is only ever needed once a check has actually come back
+  // not-matched -- never up front, and never for a category (Vehicle
+  // Diagnostics) that has no part number at all.
+  const needsPhoto = requiresPartNumber && result !== null && !result.matched;
+
+  // Both buttons only need a part number typed in to become enabled --
+  // a photo isn't required (or even shown) until a check reveals one is
+  // needed, per PRD.
+  const canCheck =
+    Boolean(vehicleComplete && categoryId && (!requiresPartNumber || partNumber.trim())) &&
+    !isChecking;
   const canContinue =
     Boolean(
       vehicleComplete &&
         categoryId &&
-        (requiresPartNumber ? partNumber.trim() && stickerPhotoUrl : true),
+        (requiresPartNumber ? partNumber.trim() && (!needsPhoto || stickerPhotoUrl) : true),
     ) && !isChecking;
 
   /**
@@ -264,7 +287,7 @@ export function VehicleModulePartForm({
       const matchResult = await checkCompatibility({
         vehicle: state.vehicle,
         categoryId,
-        ...(requiresPartNumber ? { partNumber, stickerPhotoUrl: stickerPhotoUrl! } : {}),
+        ...(requiresPartNumber ? { partNumber } : {}),
       });
       setResult(matchResult);
       return matchResult;
@@ -287,10 +310,11 @@ export function VehicleModulePartForm({
 
   /**
    * The one required action. Reuses an already-computed result (the
-   * optional preview button, or a prior attempt) when one exists;
-   * otherwise runs the check itself — either way this is the only click
-   * needed to move on, matching vs. not matched routes to the right
-   * place exactly like before, just without a separate confirm step.
+   * preview button, or a prior attempt) when one exists; otherwise runs
+   * the check itself. A fresh not-matched result stops here instead of
+   * navigating on — that's what reveals the now-required photo upload
+   * above (`needsPhoto`) — so the customer clicks Continue again once
+   * it's attached, which reuses that same stored result and proceeds.
    *
    * For a category with no part number (Vehicle Diagnostics), there's
    * only ever one Service, so there's nothing to pick on /order/service
@@ -300,12 +324,18 @@ export function VehicleModulePartForm({
   async function handleContinue() {
     if (!canContinue) return;
 
-    const matchResult = result ?? (await runCheck());
-    if (!matchResult) return;
+    let matchResult = result;
+    if (!matchResult) {
+      matchResult = await runCheck();
+      if (!matchResult) return;
+      if (requiresPartNumber && !matchResult.matched) {
+        return;
+      }
+    }
 
     update({
       partNumber: requiresPartNumber ? partNumber : "",
-      stickerPhotoUrl: requiresPartNumber ? stickerPhotoUrl : null,
+      stickerPhotoUrl: requiresPartNumber && !matchResult.matched ? stickerPhotoUrl : null,
       matchResult,
       serviceId:
         !requiresPartNumber && matchResult.matched && matchResult.services.length === 1
@@ -415,7 +445,9 @@ export function VehicleModulePartForm({
 
       {requiresPartNumber ? (
         <div className="space-y-4">
-          <h2 className="text-sm font-semibold text-foreground">Part number & photo</h2>
+          <h2 className="text-sm font-semibold text-foreground">
+            {needsPhoto ? "Part number & photo" : "Part number"}
+          </h2>
           <div className="space-y-2">
             <Label htmlFor="part-number">Part Number</Label>
             <Input
@@ -430,45 +462,45 @@ export function VehicleModulePartForm({
             </p>
           </div>
 
-          <div className="space-y-2">
-            <Label>Photo of the module&apos;s label</Label>
-            <div className="flex gap-4">
-              <FileUpload
-                value={stickerPhotoUrl}
-                onChange={handlePhotoChange}
-                purpose="wizard"
-                pathPrefix="pending/stickers"
-              />
-              <StickerReference />
+          {/* Hidden until a check comes back not-matched -- only then is
+              a photo actually needed to manually verify the module. */}
+          {needsPhoto ? (
+            <div className="space-y-2">
+              <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
+                <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                <span>
+                  We couldn&apos;t confirm this part number in our system yet. To help us verify
+                  compatibility, please upload a photo of your module with part number visible.
+                </span>
+              </div>
+              <Label>Photo of the module&apos;s label</Label>
+              <div className="flex gap-4">
+                <FileUpload
+                  value={stickerPhotoUrl}
+                  onChange={handlePhotoChange}
+                  purpose="wizard"
+                  pathPrefix="pending/stickers"
+                />
+                <StickerReference />
+              </div>
             </div>
-          </div>
+          ) : null}
         </div>
       ) : null}
 
       {checkError ? <p className="text-sm text-destructive">{checkError}</p> : null}
 
-      {/* Only for a category that needs a part number — the optional
-          preview result. Vehicle Diagnostics never shows this: it's
-          always matched, so there's nothing worth previewing, and
-          Continue below goes straight to /order/details either way. */}
-      {requiresPartNumber && result ? (
-        result.matched ? (
-          <div className="flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 p-3 text-sm">
-            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-            <span>
-              Found it — {result.services.length} service{result.services.length === 1 ? "" : "s"}{" "}
-              confirmed for this part.
-            </span>
-          </div>
-        ) : (
-          <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
-            <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-            <span>
-              We don&apos;t have this part number confirmed yet. Your order will be submitted for
-              manual review — our team will check the photo and part number and follow up.
-            </span>
-          </div>
-        )
+      {/* Only for a category that needs a part number, and only once
+          matched -- the not-matched case has its own message above,
+          next to the now-required photo upload. */}
+      {requiresPartNumber && result?.matched ? (
+        <div className="flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 p-3 text-sm">
+          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+          <span>
+            Found it — {result.services.length} service{result.services.length === 1 ? "" : "s"}{" "}
+            confirmed for this part.
+          </span>
+        </div>
       ) : null}
 
       <div className="space-y-2">
@@ -492,10 +524,10 @@ export function VehicleModulePartForm({
             type="button"
             variant="outline"
             className="w-full"
-            disabled={!canContinue || isPending}
+            disabled={!canCheck || isPending}
             onClick={handlePreviewCheck}
           >
-            Check compatibility (optional)
+            Check compatibility
           </Button>
         ) : null}
       </div>
