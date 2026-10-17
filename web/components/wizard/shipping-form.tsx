@@ -108,7 +108,7 @@ function ReviewRow({
  */
 export function ShippingForm() {
   const router = useRouter();
-  const { state, update, reset } = useWizard();
+  const { state, update } = useWizard();
   // Redirects back to whichever earlier step hasn't been completed yet
   // (TASK-024) — this is the last step before placeOrder is called, so
   // it has the most to check: a compatibility result, a service choice
@@ -232,8 +232,18 @@ export function ShippingForm() {
         idempotencyKey,
       });
 
-      // Captured here, before reset() clears the wizard state below —
-      // /order/confirmation has nothing of its own left to read.
+      // Captured here so /order/confirmation has something of its own
+      // to read. Deliberately NOT calling reset() here: this page is
+      // still mounted during the navigation below, and WizardProvider
+      // is shared across every /order/* page (app/(public)/order/
+      // layout.tsx), so clearing wizard state while this page is still
+      // mounted makes its own useStepGuard see an incomplete wizard and
+      // redirect back to /order/vehicle -- a redirect that can win the
+      // race against this push to /order/confirmation, since
+      // /order/vehicle is far more likely to already be prefetched
+      // than a route only ever reached via a programmatic push. The
+      // confirmation page resets the wizard state itself instead, once
+      // it has actually mounted.
       writeOrderResult({
         orderNumber: result.orderNumber,
         trackingToken: result.trackingToken,
@@ -245,7 +255,6 @@ export function ShippingForm() {
         donorPartNumber: state.answers.donor_part_number ?? null,
       });
 
-      reset();
       router.push("/order/confirmation");
     } catch (err) {
       setSubmitError(

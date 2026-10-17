@@ -24,7 +24,7 @@ import { writeBookingResult } from "@/lib/booking/booking-result";
  */
 export function BookingServicesForm() {
   const router = useRouter();
-  const { state, update, reset } = useBooking();
+  const { state, update } = useBooking();
   const ready = useBookingStepGuard("services");
 
   const [expandedSlug, setExpandedSlug] = useState<string | null>(null);
@@ -67,11 +67,18 @@ export function BookingServicesForm() {
         note: note.trim() || undefined,
       });
 
-      // Captured here, before reset() clears the booking state below —
-      // /book-mobile-service/confirmation has nothing of its own left
-      // to read (mirrors the ECU wizard's writeOrderResult handoff).
+      // Captured here so /book-mobile-service/confirmation has
+      // something of its own to read (mirrors the ECU wizard's
+      // writeOrderResult handoff). Deliberately NOT calling reset()
+      // here: this page is still mounted during the navigation below,
+      // and clearing state.contact/state.vehicle while it's still
+      // mounted makes this step's own useBookingStepGuard see an
+      // incomplete wizard and redirect back to /contact -- a redirect
+      // that can win the race against this push to /confirmation,
+      // since /contact is far more likely to already be prefetched.
+      // The confirmation page resets the booking state itself instead,
+      // once it has actually mounted.
       writeBookingResult(result);
-      reset();
       router.push("/book-mobile-service/confirmation");
     } catch (err) {
       setSubmitError(

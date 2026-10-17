@@ -5,28 +5,42 @@ import Link from "next/link";
 import { CheckCircle2, Clock, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { useWizard } from "@/components/wizard/wizard-store";
 import { readOrderResult, type OrderResult } from "@/lib/wizard/order-result";
 
 /**
  * /order/confirmation (TASK-023): the screen shown right after
- * /order/shipping's submit handler has already called placeOrder and
- * reset the wizard. This page has no wizard state of its own left to
- * read — it reads the short-lived handoff record written just before
- * that reset instead (lib/wizard/order-result.ts).
+ * /order/shipping's submit handler has already called placeOrder. This
+ * page has no wizard state of its own left to read by design — it
+ * reads the short-lived handoff record written just before navigating
+ * here instead (lib/wizard/order-result.ts).
+ *
+ * The wizard's own state — what this task's acceptance criteria
+ * require cleared — is reset here, once this page has actually
+ * mounted, rather than in the shipping step right before it navigates
+ * away. Doing it there raced with the navigation: WizardProvider is
+ * shared across every /order/* page (app/(public)/order/layout.tsx),
+ * so clearing it while the shipping page was still mounted made that
+ * page's own useStepGuard see an incomplete wizard and fire its own
+ * router.replace("/order/vehicle") — a redirect that could win the
+ * race against the push to this page, since /order/vehicle is far
+ * more likely to already be prefetched than a route only ever reached
+ * via a programmatic push.
  */
 export function Confirmation() {
+  const { reset } = useWizard();
   const [result, setResult] = useState<OrderResult | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    setResult(readOrderResult());
+    const stored = readOrderResult();
+    setResult(stored);
     setHydrated(true);
-    // Deliberately not clearing ecu-order-result here: reloading this
-    // same tab right after ordering should keep showing the same
-    // order. The wizard's own state — what this task's acceptance
-    // criteria require cleared — was already reset by the shipping
-    // form before it navigated here.
+    // Only once an order was actually just placed -- not on a
+    // stray/direct visit to this page with nothing to confirm.
+    if (stored) reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Avoids a flash of the "no order" fallback before sessionStorage has

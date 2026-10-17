@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { useBooking } from "@/components/booking/wizard-store";
 import { readBookingResult, type BookingResult } from "@/lib/booking/booking-result";
 
 /** The animated green checkmark (see the success-check-* classes and
@@ -23,18 +24,36 @@ function SuccessCheck() {
 
 /**
  * /book-mobile-service/confirmation: the screen shown right after the
- * services step's submit handler has already called bookMobileService
- * and reset the booking state. Mirrors components/wizard/confirmation.tsx
- * exactly -- reads the short-lived handoff record written just before
- * that reset, since there's no booking state of its own left to read.
+ * services step's submit handler has already called bookMobileService.
+ * Reads the short-lived handoff record the services step wrote just
+ * before navigating here (lib/booking/booking-result.ts) — same
+ * pattern as the ECU wizard's writeOrderResult/readOrderResult.
+ *
+ * Resetting the booking wizard's own state happens here, once this
+ * page has actually mounted, rather than in the services step right
+ * before it navigates away. Doing it there raced with the navigation:
+ * BookingProvider is shared across every /book-mobile-service/* page
+ * (app/(public)/book-mobile-service/layout.tsx), so clearing
+ * state.contact/state.vehicle while the services page was STILL
+ * mounted made that page's own useBookingStepGuard see an incomplete
+ * wizard and fire its own router.replace("/book-mobile-service/contact")
+ * — a redirect that could (and reliably did) win the race against the
+ * push to this page, since /contact is far more likely to already be
+ * prefetched than a route only ever reached via a programmatic push.
  */
 export function BookingConfirmation({ marketingUrl }: { marketingUrl: string }) {
+  const { reset } = useBooking();
   const [result, setResult] = useState<BookingResult | null>(null);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
-    setResult(readBookingResult());
+    const stored = readBookingResult();
+    setResult(stored);
     setHydrated(true);
+    // Only once a booking was actually just completed -- not on a
+    // stray/direct visit to this page with nothing to confirm.
+    if (stored) reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (!hydrated) {
