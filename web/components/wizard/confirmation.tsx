@@ -27,7 +27,7 @@ import { readOrderResult, type OrderResult } from "@/lib/wizard/order-result";
  * more likely to already be prefetched than a route only ever reached
  * via a programmatic push.
  */
-export function Confirmation() {
+export function Confirmation({ marketingUrl }: { marketingUrl: string }) {
   const { reset } = useWizard();
   const [result, setResult] = useState<OrderResult | null>(null);
   const [hydrated, setHydrated] = useState(false);
@@ -147,6 +147,15 @@ export function Confirmation() {
           </p>
         </Card>
       )}
+
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <Button asChild variant="outline" className="flex-1">
+          <a href={marketingUrl}>Return to home</a>
+        </Button>
+        <Button asChild className="flex-1">
+          <Link href="/order/vehicle">Place another order</Link>
+        </Button>
+      </div>
     </div>
   );
 }
