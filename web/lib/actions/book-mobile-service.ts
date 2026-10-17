@@ -3,7 +3,7 @@
 import "server-only";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { logServerError } from "@/lib/log";
+import { postWebhook } from "@/lib/webhook";
 import { BOOKING_SERVICES } from "@/lib/booking/catalog";
 
 // Webhook endpoint for the n8n workflow that acts on a new booking
@@ -74,29 +74,22 @@ export async function bookMobileService(input: BookServiceInput): Promise<BookSe
     },
   });
 
-  try {
-    const response = await fetch(N8N_BOOKING_WEBHOOK_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        bookingId: booking.id.toString(),
-        firstName: parsed.firstName,
-        lastName: parsed.lastName,
-        email: parsed.email,
-        phone: parsed.phone,
-        vehicle: parsed.vehicle,
-        services: services.map((service) => ({ slug: service.slug, title: service.title })),
-        note,
-        submittedAt: booking.createdAt.toISOString(),
-      }),
-    });
-    if (!response.ok) throw new Error(`Webhook responded with ${response.status}`);
+  const delivered = await postWebhook("book-mobile-service-webhook", N8N_BOOKING_WEBHOOK_URL, {
+    bookingId: booking.id.toString(),
+    firstName: parsed.firstName,
+    lastName: parsed.lastName,
+    email: parsed.email,
+    phone: parsed.phone,
+    vehicle: parsed.vehicle,
+    services: services.map((service) => ({ slug: service.slug, title: service.title })),
+    note,
+    submittedAt: booking.createdAt.toISOString(),
+  });
+  if (delivered) {
     await prisma.mobileServiceBooking.update({
       where: { id: booking.id },
       data: { webhookDeliveredAt: new Date() },
     });
-  } catch (error) {
-    logServerError("book-mobile-service-webhook", error);
   }
 
   return {

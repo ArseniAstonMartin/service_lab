@@ -12,6 +12,7 @@ import { quote } from "@/lib/domain/quote";
 import { generateTrackingToken } from "@/lib/domain/token";
 import { isVercelBlobUrl } from "@/lib/blob";
 import { sendOrderEmail } from "@/lib/email/send";
+import { postWebhook } from "@/lib/webhook";
 import { advanceOrderStatus } from "@/lib/services/order-status";
 // Side-effect-only import: TASK-026's lib/services/payment.ts registers
 // itself as the awaiting_payment side effect at module load time, and
@@ -22,6 +23,11 @@ import { advanceOrderStatus } from "@/lib/services/order-status";
 import "@/lib/services/payment";
 
 const RETURN_SHIPPING_FEE_KEY = "return_shipping_fee_cents";
+
+// Webhook endpoint for the n8n workflow that acts on a new ECU/module
+// order (notifications, etc.) -- same fixed, non-secret-URL reasoning
+// as lib/actions/book-mobile-service.ts's N8N_BOOKING_WEBHOOK_URL.
+const N8N_ECU_WEBHOOK_URL = "https://bestkeyservice.app.n8n.cloud/webhook/ecu-booked";
 
 const placeOrderSchema = z.object({
   vehicle: z.object({
@@ -259,6 +265,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
   let servicePriceCents: number | null = null;
   let returnShippingFeeCents: number | null = null;
   let totalAmountCents: number | null = null;
+  let matchedServiceName: string | null = null;
   const textAnswers: Record<string, string> = {};
   const photoAnswersToStore: Record<string, string> = {};
 
@@ -270,6 +277,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
 
     matchedEntryId = matchResult.entryId !== null ? BigInt(matchResult.entryId as string) : null;
     serviceId = BigInt(selected.id);
+    matchedServiceName = selected.name;
 
     const feeSetting = await prisma.appSetting.findUnique({
       where: { key: RETURN_SHIPPING_FEE_KEY },
@@ -402,15 +410,34 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
   }
 
   // Emails #1 (customer: order submitted) and #5 (admin: new order) —
-  // TASK-042. Sent for both paths, only AFTER every DB write above has
-  // already committed (the order/photos/answers transaction, plus the
-  // matched path's own separate advanceOrderStatus transition).
-  // sendOrderEmail() never throws — a slow or failed send is logged to
-  // EmailLog and can never turn an already-successful placeOrder call
-  // into a failed one.
+  // TASK-042 — plus the n8n webhook notification, all sent for both
+  // paths, only AFTER every DB write above has already committed (the
+  // order/photos/answers transaction, plus the matched path's own
+  // separate advanceOrderStatus transition). sendOrderEmail() and
+  // postWebhook() never throw — a failure is logged (to EmailLog, or
+  // via logServerError) and can never turn an already-successful
+  // placeOrder call into a failed one.
   await Promise.all([
     sendOrderEmail(order.id, "order_submitted"),
     sendOrderEmail(order.id, "admin_new_order"),
+    postWebhook("place-order-webhook", N8N_ECU_WEBHOOK_URL, {
+      orderId: order.id.toString(),
+      trackingToken: order.trackingToken,
+      status: result.status,
+      customer: {
+        name: parsed.contact.name,
+        email: parsed.contact.email,
+        phone: parsed.contact.phone,
+      },
+      vehicle: parsed.vehicle,
+      category: category.name,
+      partNumber: normalizedPartNumber,
+      matched: matchResult.matched,
+      service: matchedServiceName ? { name: matchedServiceName, priceCents: servicePriceCents } : null,
+      totalAmountCents,
+      description: parsed.description,
+      submittedAt: order.createdAt.toISOString(),
+    }),
   ]);
 
   return result;

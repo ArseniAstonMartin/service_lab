@@ -6,6 +6,31 @@ import { expect, test } from "@playwright/test";
 // real" discipline tests.site/tesla.spec.ts and
 // vehicle-diagnostics.spec.ts already apply to the ECU order flow.
 
+test("confirmation shows the success checkmark and both follow-up buttons", async ({ page }) => {
+  // Seeds the handoff record directly (lib/booking/booking-result.ts)
+  // instead of submitting for real -- same reasoning as the rest of
+  // this file never clicking Submit.
+  await page.addInitScript(() => {
+    sessionStorage.setItem(
+      "mobile-service-booking-result",
+      JSON.stringify({ bookingId: "42", serviceTitles: ["Oil & Filter Change", "Brakes"] }),
+    );
+  });
+  await page.goto("http://order.localhost:3000/book-mobile-service/confirmation");
+
+  await expect(page.getByRole("heading", { name: "Booking submitted" })).toBeVisible();
+  await expect(page.getByText("Booking number")).toContainText("#42");
+  await expect(page.getByText("Requested: Oil & Filter Change, Brakes")).toBeVisible();
+  // The animated checkmark: circle + check path present in the DOM.
+  await expect(page.locator("svg.success-check-svg circle.success-check-circle")).toHaveCount(1);
+  await expect(page.locator("svg.success-check-svg path.success-check-mark")).toHaveCount(1);
+
+  const homeLink = page.getByRole("link", { name: "Return to home", exact: true });
+  await expect(homeLink).toHaveAttribute("href", "http://localhost:3000");
+  const bookAnotherLink = page.getByRole("link", { name: "Book another service", exact: true });
+  await expect(bookAnotherLink).toHaveAttribute("href", "/book-mobile-service/contact");
+});
+
 test("contact step requires valid fields before moving on", async ({ page }) => {
   await page.goto("http://order.localhost:3000/book-mobile-service/contact");
   await expect(page.getByRole("heading", { name: "Let's get started." })).toBeVisible();
