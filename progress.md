@@ -1706,3 +1706,7 @@ still depends on TASK-028.
 ## 2026-10-16 — Airbag card icons: exact crop, not a redraw
 - `AIRBAG-CARD-ICONS-EXACT`: user asked for the exact reference icons, not an approximation. Replaced the hand-drawn SVG pictograms with WebP images cropped directly out of the supplied reference (Pillow, red-pixel bounding-box detection per icon). Deleted `reset-icons.tsx`.
 - Verified: `tsc --noEmit`, full production build, `npm run site:test` (7/7), `marketing.spec.ts` (5/5), and a scaled screenshot confirming a pixel-level match.
+
+## 2026-10-17 — Defer the module photo until a part number doesn't match
+- `PHOTO-ONLY-ON-MISMATCH`: the photo upload is now hidden by default; Continue and Check compatibility both enable as soon as a part number is typed. A match proceeds with no photo ever collected; a not-matched result stays on the page, reveals the now-required upload with new copy ("We couldn't confirm this part number in our system yet...") instead of navigating on. "Check compatibility (optional)" → "Check compatibility". `checkCompatibility` dropped the photo from its schema entirely (never used in the lookup); `placeOrder`'s photo requirement now keys off `!matchResult.matched` instead of the category.
+- Verified: `tsc --noEmit`, full production build, full Playwright suite (10/10, two new tests covering the disabled-until-photo and enabled-after-photo paths) green on repeat runs.
