@@ -8,8 +8,8 @@ test("desktop landing, dropdown and cross-host booking links", async ({ page }) 
   await expect(page.locator(".m-service-card")).toHaveCount(7);
   await expect.poll(() => page.locator(".m-hero-image").evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
   await expect(
-    page.getByRole("link", { name: "Book Service", exact: true }).first(),
-  ).toHaveAttribute("href", "http://order.localhost:3000/order/vehicle");
+    page.getByRole("link", { name: "Book Mobile Service", exact: true }).first(),
+  ).toHaveAttribute("href", "http://order.localhost:3000/book-mobile-service/contact");
   await page.getByRole("button", { name: "Services", exact: true }).click();
   await page
     .locator("#services-menu")
@@ -77,6 +77,11 @@ test("production host routing preserves queries and protects admin", async ({ re
       "best-auto-repair.com",
       "/order/vehicle?ref=home",
       "https://order.best-auto-repair.com/order/vehicle?ref=home",
+    ],
+    [
+      "best-auto-repair.com",
+      "/book-mobile-service/contact",
+      "https://order.best-auto-repair.com/book-mobile-service/contact",
     ],
     [
       "best-auto-repair.com",

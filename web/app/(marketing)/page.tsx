@@ -41,7 +41,7 @@ export default async function HomePage() {
             mail in your control modules for supported programming, cloning, and reset services.
           </p>
           <div className="m-actions">
-            <ActionLink href={`${urls.order}/order/vehicle`}>Book Service</ActionLink>
+            <ActionLink href={`${urls.order}/book-mobile-service/contact`}>Book Mobile Service</ActionLink>
             <ActionLink href={`${urls.order}/order/vehicle`} secondary icon="package">
               Send a Module
             </ActionLink>

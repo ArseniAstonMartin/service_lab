@@ -5,7 +5,11 @@ export default async function robots(): Promise<MetadataRoute.Robots> {
   if (host !== "best-auto-repair.com" && host !== "www.best-auto-repair.com")
     return { rules: { userAgent: "*", disallow: "/" } };
   return {
-    rules: { userAgent: "*", allow: "/", disallow: ["/admin", "/order", "/track", "/api"] },
+    rules: {
+      userAgent: "*",
+      allow: "/",
+      disallow: ["/admin", "/order", "/track", "/book-mobile-service", "/api"],
+    },
     sitemap: "https://best-auto-repair.com/sitemap.xml",
   };
 }

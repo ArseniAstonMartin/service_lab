@@ -286,3 +286,34 @@ model EmailLog {
   @@unique([orderId, emailType])
   @@map("email_logs")
 }
+
+// --- Mobile service booking (PHOTO-ONLY-ON-MISMATCH's sibling feature) ---
+
+// A customer request for a regular service (oil change, brakes, tire
+// rotation, ...) booked through the separate /book-mobile-service wizard
+// -- deliberately its own table, never mixed into Order, which models a
+// module/part-number repair request with a very different lifecycle
+// (status machinery, pricing, Stripe, shipping) that doesn't apply here.
+model MobileServiceBooking {
+  id        BigInt   @id @default(autoincrement())
+  firstName String   @map("first_name") @db.VarChar(100)
+  lastName  String   @map("last_name") @db.VarChar(100)
+  email     String   @db.VarChar(255)
+  phone     String   @db.VarChar(50)
+  make      String   @db.VarChar(50)
+  model     String   @db.VarChar(50)
+  year      Int      @db.SmallInt
+  // Slugs from lib/booking/catalog.ts's static service list -- a plain
+  // Postgres text array rather than a join table, since that list is
+  // fixed, code-defined content, not an admin-editable catalog like
+  // ModuleCategory/Service above.
+  services String[]
+  note     String?  @db.Text
+  // Null until the n8n webhook POST actually succeeds -- a failed
+  // delivery is logged but never blocks or rolls back the booking
+  // itself, same as every other side effect in this app.
+  webhookDeliveredAt DateTime? @map("webhook_delivered_at") @db.Timestamptz(6)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("mobile_service_bookings")
+}

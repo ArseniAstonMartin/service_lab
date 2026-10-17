@@ -28,6 +28,14 @@ test("old deep links retain their path on the right host", () => {
     routeForHost(SITE_HOSTS.marketing, "/order/compatibility").pathname,
     "/order/compatibility",
   );
+  assert.equal(
+    routeForHost(SITE_HOSTS.marketing, "/book-mobile-service/contact").origin,
+    `https://${SITE_HOSTS.order}`,
+  );
+  assert.equal(
+    routeForHost(SITE_HOSTS.marketing, "/book-mobile-service/contact").pathname,
+    "/book-mobile-service/contact",
+  );
   const admin = routeForHost(SITE_HOSTS.marketing, "/admin/orders/42");
   assert.equal(admin.origin, `https://${SITE_HOSTS.admin}`);
   assert.equal(admin.pathname, "/orders/42");

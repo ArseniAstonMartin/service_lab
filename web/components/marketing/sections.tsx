@@ -122,7 +122,7 @@ export function TwoWays({ orderUrl }: { orderUrl: string }) {
               </li>
             ))}
           </ul>
-          <ActionLink href={`${orderUrl}/order/vehicle`} secondary icon="none">
+          <ActionLink href={`${orderUrl}/book-mobile-service/contact`} secondary icon="none">
             Book Local Service
           </ActionLink>
         </div>
@@ -224,7 +224,7 @@ export function ClosingBanner({ orderUrl }: { orderUrl: string }) {
           <br className="m-desktop-break" /> programming, cloning, or reset operation.
         </p>
         <div className="m-actions">
-          <ActionLink href={`${orderUrl}/order/vehicle`}>Book Service</ActionLink>
+          <ActionLink href={`${orderUrl}/book-mobile-service/contact`}>Book Mobile Service</ActionLink>
           <ActionLink href={`${orderUrl}/order/vehicle`} secondary icon="package">
             Send a Module
           </ActionLink>

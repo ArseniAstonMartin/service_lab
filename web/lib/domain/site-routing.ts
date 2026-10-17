@@ -65,7 +65,8 @@ export function routeForHost(host: string, pathname: string, method = "GET"): Ro
     pathname === "/sitemap.xml"
   )
     return { ...base, kind: "next" };
-  const orderPath = under(pathname, "/order") || under(pathname, "/track");
+  const orderPath =
+    under(pathname, "/order") || under(pathname, "/track") || under(pathname, "/book-mobile-service");
   if ((isMarketingHost || isAdminHost) && orderPath)
     return { ...base, kind: "redirect", origin: urls.order };
   if ((isMarketingHost || isOrderHost) && under(pathname, "/admin"))
